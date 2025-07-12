@@ -11,3 +11,4 @@ wiki/*
 *.pyzw
 *.pyzwz
 *.json
+*.edn

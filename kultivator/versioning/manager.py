@@ -7,7 +7,7 @@ staging, committing, and maintaining a complete audit trail of AI changes.
 
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union, Any
 from datetime import datetime
 
 try:
@@ -37,7 +37,7 @@ class VersionManager:
             repo_path: Path to the Git repository (default: wiki directory)
         """
         self.repo_path = Path(repo_path)
-        self.repo: Optional[object] = None
+        self.repo: Optional[Any] = None  # Using Any to avoid GitPython typing issues
         
         if not GIT_AVAILABLE:
             raise ImportError("GitPython package is required for versioning. Install with: pip install gitpython")
@@ -55,14 +55,14 @@ class VersionManager:
             # Check if repository already exists
             if self._is_git_repository():
                 logging.info("Git repository already exists")
-                self.repo = Repo(self.repo_path)
+                self.repo = Repo(self.repo_path)  # type: ignore
                 return True
             
             # Create the directory if it doesn't exist
             self.repo_path.mkdir(parents=True, exist_ok=True)
             
             # Initialize new Git repository
-            self.repo = Repo.init(self.repo_path)
+            self.repo = Repo.init(self.repo_path)  # type: ignore
             
             # Create initial .gitignore
             gitignore_path = self.repo_path / ".gitignore"
@@ -88,8 +88,9 @@ Thumbs.db
 """)
                 
                 # Add and commit .gitignore (use relative path)
-                self.repo.index.add([".gitignore"])
-                self.repo.index.commit("Initial commit: Add .gitignore")
+                if self.repo is not None:
+                    self.repo.index.add([".gitignore"])  # type: ignore
+                    self.repo.index.commit("Initial commit: Add .gitignore")  # type: ignore
                 
             logging.info("Git repository initialized successfully")
             return True
@@ -103,7 +104,7 @@ Thumbs.db
         try:
             if not self.repo_path.exists():
                 return False
-            Repo(self.repo_path)
+            Repo(self.repo_path)  # type: ignore
             return True
         except InvalidGitRepositoryError:
             return False
@@ -129,7 +130,7 @@ Thumbs.db
                 rel_path = rel_path.relative_to(self.repo_path)
             
             # Stage the file
-            self.repo.index.add([str(rel_path)])
+            self.repo.index.add([str(rel_path)])  # type: ignore
             logging.info(f"Staged file: {rel_path}")
             return True
             
@@ -161,7 +162,7 @@ Thumbs.db
                 rel_paths.append(str(rel_path))
             
             # Stage all files
-            self.repo.index.add(rel_paths)
+            self.repo.index.add(rel_paths)  # type: ignore
             logging.info(f"Staged {len(rel_paths)} files")
             return True
             
@@ -188,18 +189,18 @@ Thumbs.db
             
         try:
             # Check if there are any staged changes
-            if not self.repo.index.diff("HEAD"):
+            if not self.repo.index.diff("HEAD"):  # type: ignore
                 logging.info("No changes to commit")
                 return True
             
             # Create commit with custom author
-            commit = self.repo.index.commit(
+            commit = self.repo.index.commit(  # type: ignore
                 message,
-                author=git.Actor(author_name, author_email),
-                committer=git.Actor(author_name, author_email)
+                author=git.Actor(author_name, author_email),  # type: ignore
+                committer=git.Actor(author_name, author_email)  # type: ignore
             )
             
-            logging.info(f"Created commit: {commit.hexsha[:8]} - {message}")
+            logging.info(f"Created commit: {commit.hexsha[:8]} - {message}")  # type: ignore
             return True
             
         except Exception as e:
@@ -295,11 +296,11 @@ based on changes detected in the source data."""
             modified_files = []
             
             # Check for unstaged changes
-            for item in self.repo.index.diff(None):
-                modified_files.append(item.a_path)
+            for item in self.repo.index.diff(None):  # type: ignore
+                modified_files.append(item.a_path)  # type: ignore
             
             # Check for untracked files
-            for untracked in self.repo.untracked_files:
+            for untracked in self.repo.untracked_files:  # type: ignore
                 modified_files.append(untracked)
             
             if modified_files:
@@ -328,14 +329,14 @@ based on changes detected in the source data."""
             
         try:
             commits = []
-            for commit in self.repo.iter_commits(max_count=limit):
+            for commit in self.repo.iter_commits(max_count=limit):  # type: ignore
                 commits.append({
-                    'hash': commit.hexsha,
-                    'short_hash': commit.hexsha[:8],
-                    'message': commit.message.strip(),
-                    'author': str(commit.author),
-                    'date': commit.committed_datetime.isoformat(),
-                    'files_changed': len(commit.stats.files)
+                    'hash': commit.hexsha,  # type: ignore
+                    'short_hash': commit.hexsha[:8],  # type: ignore
+                    'message': commit.message.strip(),  # type: ignore
+                    'author': str(commit.author),  # type: ignore
+                    'date': commit.committed_datetime.isoformat(),  # type: ignore
+                    'files_changed': len(commit.stats.files)  # type: ignore
                 })
             
             return commits
@@ -356,12 +357,12 @@ based on changes detected in the source data."""
             
         try:
             status = {
-                'is_dirty': self.repo.is_dirty(),
-                'untracked_files': len(self.repo.untracked_files),
-                'modified_files': len(self.repo.index.diff(None)),
-                'staged_files': len(self.repo.index.diff("HEAD")),
-                'total_commits': len(list(self.repo.iter_commits())),
-                'active_branch': self.repo.active_branch.name if self.repo.active_branch else None
+                'is_dirty': self.repo.is_dirty(),  # type: ignore
+                'untracked_files': len(self.repo.untracked_files),  # type: ignore
+                'modified_files': len(self.repo.index.diff(None)),  # type: ignore
+                'staged_files': len(self.repo.index.diff("HEAD")),  # type: ignore
+                'total_commits': len(list(self.repo.iter_commits())),  # type: ignore
+                'active_branch': self.repo.active_branch.name if self.repo.active_branch else None  # type: ignore
             }
             
             return status
