@@ -1,0 +1,58 @@
+# Kultivator Configuration File
+# This file contains all configurable settings for the Kultivator system
+
+# AI Model Configuration
+ai:
+  ollama_host: "http://localhost:11434"
+  model: "gemma3"
+  timeout: 30.0
+  
+# Database Configuration
+database:
+  filename: "kultivator.db"
+  timeout: 30.0
+  
+# File System Configuration
+paths:
+  wiki_dir: "wiki"
+  state_file: "logseq_last_state.json"
+  log_file: "kultivator.log"
+  
+# Git Configuration
+git:
+  auto_commit: true
+  commit_messages:
+    bootstrap: "AI: Bootstrap knowledge base with {entity_count} entities from {block_count} blocks"
+    incremental: "AI: {action} {entity_name}\n\nUpdated by Kultivator AI on {timestamp}\nSource block: {block_id}\n\nThis commit represents an incremental update to the knowledge base\nbased on changes detected in the source data."
+    
+# Wiki Configuration
+wiki:
+  file_extension: ".md"
+  entity_directories:
+    person: "People"
+    project: "Projects" 
+    place: "Places"
+    company: "Companies"
+    book: "Books"
+    other: "Other"
+  
+# Logging Configuration
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+# Import Configuration
+import:
+  default_logseq_path: "./sample_logseq_data"
+  supported_formats: ["edn", "json"]
+  
+# Agent Configuration
+agents:
+  max_retries: 3
+  enable_tools: true
+  context_limit: 5  # Max items returned by get_entity_context
+  
+# Performance Configuration
+performance:
+  batch_size: 100
+  max_concurrent_agents: 1 

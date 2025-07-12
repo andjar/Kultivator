@@ -18,16 +18,21 @@ from kultivator.importers import MockImporter, LogseqEDNImporter
 from kultivator.agents import AgentRunner
 from kultivator.database import DatabaseManager
 from kultivator.versioning import VersionManager
+from kultivator.config import config
 
 
 def setup_logging():
     """Configure logging for the application."""
+    level = getattr(logging, config.get("logging.level", "INFO").upper())
+    format_str = config.get("logging.format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    log_file = config.log_filename
+    
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        level=level,
+        format=format_str,
         handlers=[
             logging.StreamHandler(sys.stdout),
-            logging.FileHandler('kultivator.log')
+            logging.FileHandler(log_file)
         ]
     )
 
@@ -42,14 +47,8 @@ def get_entity_wiki_path(entity: Entity) -> str:
     Returns:
         Relative path to the entity's wiki file
     """
-    # Map entity types to wiki subdirectories
-    type_mapping = {
-        'person': 'People',
-        'project': 'Projects', 
-        'place': 'Places',
-        'company': 'Companies',
-        'book': 'Books'
-    }
+    # Get entity type mapping from configuration
+    type_mapping = config.entity_directories
     
     # Default to 'Other' for unknown types
     wiki_subdir = type_mapping.get(entity.entity_type.lower(), 'Other')
@@ -59,7 +58,11 @@ def get_entity_wiki_path(entity: Entity) -> str:
     # Remove any characters that might be problematic in filenames
     safe_name = ''.join(c for c in safe_name if c.isalnum() or c in '_-')
     
-    return f"wiki/{wiki_subdir}/{safe_name}.md"
+    # Use configured wiki directory and file extension
+    wiki_dir = config.wiki_directory
+    file_ext = config.get("wiki.file_extension", ".md")
+    
+    return f"{wiki_dir}/{wiki_subdir}/{safe_name}{file_ext}"
 
 
 def create_placeholder_wiki_file(entity: Entity, wiki_path: str):
@@ -142,7 +145,7 @@ def run_epoch1_pipeline():
         logging.info(f"Retrieved {len(blocks)} blocks from mock importer")
         
         # Initialize agent runner
-        with AgentRunner() as agent_runner:
+        with AgentRunner(database_manager=db) as agent_runner:
             entity_count = 0
             
             # Process each block
@@ -221,7 +224,7 @@ def run_epoch2_pipeline():
         logging.info(f"Retrieved {len(blocks)} blocks from mock importer")
         
         # Initialize agent runner
-        with AgentRunner() as agent_runner:
+        with AgentRunner(database_manager=db) as agent_runner:
             entity_count = 0
             
             # Process each block
@@ -360,7 +363,7 @@ def run_bootstrap_pipeline(importer_type: str, logseq_path: str | None = None):
         importer = MockImporter()
     
     # Initialize version manager
-    version_manager = VersionManager("wiki")
+    version_manager = VersionManager(config.wiki_directory)
     version_manager.initialize_repository()
     
     # Initialize database
@@ -373,7 +376,7 @@ def run_bootstrap_pipeline(importer_type: str, logseq_path: str | None = None):
         logging.info(f"Retrieved {len(blocks)} blocks")
         
         # Initialize agent runner
-        with AgentRunner() as agent_runner:
+        with AgentRunner(database_manager=db) as agent_runner:
             entity_count = 0
             processed_blocks = 0
             
@@ -497,7 +500,7 @@ def run_incremental_pipeline(importer_type: str, logseq_path: str | None = None)
         raise ValueError(f"Unknown importer type: {importer_type}")
     
     # Initialize version manager
-    version_manager = VersionManager("wiki")
+    version_manager = VersionManager(config.wiki_directory)
     
     # Check if repository exists
     if not version_manager._is_git_repository():
@@ -526,7 +529,7 @@ def run_incremental_pipeline(importer_type: str, logseq_path: str | None = None)
         logging.info(f"Found {len(changed_blocks)} changed blocks to process")
         
         # Initialize agent runner
-        with AgentRunner() as agent_runner:
+        with AgentRunner(database_manager=db) as agent_runner:
             processed_blocks = 0
             updated_entities = 0
             

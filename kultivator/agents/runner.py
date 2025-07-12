@@ -7,10 +7,13 @@ used for processing and synthesis.
 
 import httpx
 import json
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import logging
 
 from ..models import CanonicalBlock, TriageResult, Entity
+from ..database import DatabaseManager
+from ..config import config
+from .registry import agent_registry, AgentConfig
 
 
 class AgentRunner:
@@ -18,17 +21,20 @@ class AgentRunner:
     Manages communication with Ollama and runs AI agents.
     """
     
-    def __init__(self, ollama_host: str = "http://localhost:11434", model: str = "gemma3"):
+    def __init__(self, ollama_host: Optional[str] = None, model: Optional[str] = None, 
+                 database_manager: Optional[DatabaseManager] = None):
         """
         Initialize the agent runner.
         
         Args:
-            ollama_host: The Ollama server URL
-            model: The model name to use for inference
+            ollama_host: The Ollama server URL (defaults to config value)
+            model: The model name to use for inference (defaults to config value)
+            database_manager: Optional database manager for agent tools
         """
-        self.ollama_host = ollama_host
-        self.model = model
-        self.client = httpx.Client(timeout=30.0)
+        self.ollama_host = ollama_host or config.ollama_host
+        self.model = model or config.model_name
+        self.client = httpx.Client(timeout=config.ollama_timeout)
+        self.db = database_manager
         
     def __enter__(self):
         """Context manager entry."""
@@ -125,20 +131,12 @@ class AgentRunner:
         Returns:
             TriageResult containing discovered entities and summary
         """
-        system_prompt = """You are an information clerk. Read this data block and identify all key entities (people, projects, etc.) and summarize the core fact. Output only valid JSON.
-
-Your task:
-1. Identify entities mentioned in the content (look for [[Entity Name]] patterns and other clear references)
-2. Classify each entity type as one of: person, project, place, company, book, other
-3. Provide a concise summary of the key information
-
-Output format (JSON only, no explanations):
-{
-  "entities": [
-    {"name": "Entity Name", "type": "person|project|place|company|book|other"}
-  ],
-  "summary": "Brief summary of the core information"
-}"""
+        # Get agent configuration from registry
+        agent_config = agent_registry.get_agent("triage")
+        if not agent_config:
+            raise ValueError("Triage agent not found in registry")
+            
+        system_prompt = agent_config.system_prompt
 
         # Format the block content for processing
         content_text = self._format_block_for_prompt(block)
@@ -205,26 +203,24 @@ Remember to output only valid JSON."""
         Returns:
             Generated or updated Markdown content for the entity's wiki page
         """
+        # Gather additional context using database tools
+        context_info = self._gather_entity_context(entity)
+        
+        # Select appropriate agent based on mode
         if existing_content:
             # Merge mode: Update existing content with new information
-            system_prompt = """You are a meticulous archivist. Your task is to update an existing wiki page with new information while preserving the existing structure and content.
-
-Guidelines for content merging:
-1. Preserve the existing title and overall structure
-2. Add new information to appropriate sections
-3. If new information contradicts existing content, note both versions
-4. Add specific details (dates, names, numbers) to a "Details" section
-5. Maintain consistent Markdown formatting
-6. Keep a neutral, encyclopedic tone
-7. Add an "Updates" section if significant new information is added
-
-Do not duplicate existing information. Focus on integrating new details seamlessly.
-Do not include any metadata or front matter - just the updated Markdown content."""
-
+            agent_config = agent_registry.get_agent("synthesizer_merge")
+            if not agent_config:
+                raise ValueError("Synthesizer merge agent not found in registry")
+                
+            system_prompt = agent_config.system_prompt
             prompt = f"""Update this existing wiki page with new information:
 
 Entity Name: {entity.name}
 Entity Type: {entity.entity_type}
+
+KNOWLEDGE BASE CONTEXT:
+{context_info}
 
 EXISTING CONTENT:
 {existing_content}
@@ -232,31 +228,27 @@ EXISTING CONTENT:
 NEW INFORMATION:
 {summary}
 
-Generate the complete updated Markdown page, preserving existing content while seamlessly integrating the new information."""
+Generate the complete updated Markdown page, preserving existing content while seamlessly integrating the new information. Use the knowledge base context to create relevant cross-references where appropriate."""
 
         else:
             # Creation mode: Generate new content from scratch
-            system_prompt = """You are a meticulous archivist. Your task is to create a comprehensive wiki page for an entity based on the provided information. 
-
-Write a complete, well-structured Markdown page that includes:
-1. A clear title using the entity name
-2. Basic information about the entity type
-3. A summary section with key details
-4. A details section for additional information
-5. Proper Markdown formatting
-
-Keep the content informative but concise. Use proper Markdown headers, lists, and formatting. 
-Write in a neutral, encyclopedic tone suitable for a personal knowledge base.
-
-Do not include any metadata or front matter - just the Markdown content."""
-
+            agent_config = agent_registry.get_agent("synthesizer_create")
+            if not agent_config:
+                raise ValueError("Synthesizer create agent not found in registry")
+                
+            system_prompt = agent_config.system_prompt
             prompt = f"""Create a wiki page for this entity:
 
 Entity Name: {entity.name}
 Entity Type: {entity.entity_type}
-Information: {summary}
 
-Generate a complete Markdown page with proper structure and formatting."""
+KNOWLEDGE BASE CONTEXT:
+{context_info}
+
+NEW INFORMATION:
+{summary}
+
+Generate a complete Markdown page with proper structure and formatting. Use the knowledge base context to create relevant cross-references where appropriate."""
 
         try:
             response = self._call_ollama_sync(prompt, system_prompt)
@@ -328,3 +320,134 @@ Generate a complete Markdown page with proper structure and formatting."""
             lines.append(self._format_block_for_prompt(child, indent + 1))
             
         return "\n".join(lines) 
+
+    def list_entities(self, entity_type: Optional[str] = None) -> List[str]:
+        """
+        Tool: List entities from the database, optionally filtered by type.
+        
+        Args:
+            entity_type: Optional entity type to filter by
+            
+        Returns:
+            List of entity names
+        """
+        if not self.db or not self.db.connection:
+            logging.warning("Database not available for list_entities tool")
+            return []
+            
+        try:
+            if entity_type:
+                result = self.db.connection.execute(
+                    "SELECT entity_name FROM entities WHERE entity_type = ? ORDER BY entity_name",
+                    [entity_type]
+                ).fetchall()
+            else:
+                result = self.db.connection.execute(
+                    "SELECT entity_name FROM entities ORDER BY entity_name"
+                ).fetchall()
+                
+            return [row[0] for row in result]
+            
+        except Exception as e:
+            logging.error(f"Error in list_entities tool: {e}")
+            return []
+    
+    def get_entity_context(self, entity_name: str, limit: Optional[int] = None) -> List[str]:
+        """
+        Tool: Get context about an entity from blocks that mention it.
+        
+        Args:
+            entity_name: Name of the entity to get context for
+            limit: Maximum number of context blocks to return (defaults to config value)
+            
+        Returns:
+            List of block contents that mention the entity
+        """
+        if not self.db or not self.db.connection:
+            logging.warning("Database not available for get_entity_context tool")
+            return []
+            
+        # Use config value if limit not specified
+        if limit is None:
+            limit = config.context_limit
+            
+        try:
+            # Get block IDs that mention this entity
+            mention_results = self.db.connection.execute("""
+                SELECT DISTINCT em.block_id, pb.processed_at
+                FROM entity_mentions em
+                JOIN processed_blocks pb ON em.block_id = pb.block_id
+                WHERE em.entity_name = ?
+                ORDER BY pb.processed_at DESC
+                LIMIT ?
+            """, [entity_name, limit]).fetchall()
+            
+            if not mention_results:
+                return []
+            
+            # For now, return the block IDs as context
+            # In a full implementation, we'd need access to the original block content
+            # This is a simplified version that returns block references
+            context = []
+            for row in mention_results:
+                block_id = row[0]
+                processed_at = row[1]
+                context.append(f"Referenced in block {block_id} (processed: {processed_at})")
+                
+            return context
+            
+        except Exception as e:
+            logging.error(f"Error in get_entity_context tool: {e}")
+            return []
+
+    def _gather_entity_context(self, entity: Entity) -> str:
+        """
+        Gather relevant context about an entity using database tools.
+        
+        Args:
+            entity: The entity to gather context for
+            
+        Returns:
+            Formatted string with context information
+        """
+        if not self.db:
+            return "Database context not available."
+            
+        context_parts = []
+        
+        # Get entities of the same type for context
+        similar_entities = self.list_entities(entity.entity_type)
+        if similar_entities:
+            # Limit to 5 for brevity
+            similar_count = len(similar_entities)
+            similar_sample = similar_entities[:5]
+            context_parts.append(f"Related {entity.entity_type} entities ({similar_count} total): {', '.join(similar_sample)}")
+        
+        # Get mention context for this entity
+        entity_context = self.get_entity_context(entity.name)
+        if entity_context:
+            context_parts.append(f"Previous mentions: {', '.join(entity_context)}")
+        
+        # Get total entity count for general context
+        all_entities = self.list_entities()
+        if all_entities:
+            context_parts.append(f"Total entities in knowledge base: {len(all_entities)}")
+            
+        return "\n".join(context_parts) if context_parts else "No additional context available."
+
+    def _get_available_tools_description(self) -> str:
+        """
+        Get a description of available tools for AI agents.
+        
+        Returns:
+            String describing available tools
+        """
+        if not self.db:
+            return "No database tools available."
+            
+        return """Available tools you can request:
+- list_entities(type): Get all entities of a specific type (person, project, place, etc.)
+- get_entity_context(name): Get context about how an entity is mentioned in the knowledge base
+
+To use a tool, mention it in your response like: "I need to check related entities: [TOOL: list_entities(person)]"
+""" 
