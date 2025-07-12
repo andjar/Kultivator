@@ -63,25 +63,25 @@ class LogseqEDNImporter(BaseImporter):
         edn_files = self._find_edn_files()
         
         if not edn_files:
-            logging.warning("No EDN database files found. Creating sample data.")
+            logging.warning("No EDN/JSON database files found. Creating sample data.")
             return self._create_sample_logseq_blocks()
         
         all_blocks = []
         
         for edn_file in edn_files:
             try:
-                logging.info(f"Parsing EDN file: {edn_file}")
+                logging.info(f"Parsing data file: {edn_file}")
                 blocks = self._parse_edn_file(edn_file)
                 all_blocks.extend(blocks)
             except Exception as e:
-                logging.error(f"Failed to parse EDN file {edn_file}: {e}")
+                logging.error(f"Failed to parse data file {edn_file}: {e}")
                 continue
         
         if not all_blocks:
-            logging.warning("No blocks found in EDN files. Creating sample data.")
+            logging.warning("No blocks found in data files. Creating sample data.")
             return self._create_sample_logseq_blocks()
         
-        logging.info(f"Successfully loaded {len(all_blocks)} blocks from Logseq database")
+        logging.info(f"Successfully loaded {len(all_blocks)} blocks from real data")
         return all_blocks
     
     def get_changed_blocks(self) -> List[CanonicalBlock]:
@@ -93,26 +93,34 @@ class LogseqEDNImporter(BaseImporter):
         """
         logging.info("Detecting changed blocks...")
         
-        current_state = self._calculate_current_state()
+        # Get current blocks and calculate their state
+        current_blocks = self.get_all_blocks()
+        current_state = self._calculate_block_state(current_blocks)
         last_state = self._load_last_state()
         
         if not last_state:
             logging.info("No previous state found. Treating all blocks as changed.")
-            blocks = self.get_all_blocks()
             self._save_current_state(current_state)
-            return blocks
+            return current_blocks
         
         # Compare states to find changes
         changed_blocks = []
         
         # Find new or modified blocks
-        for block_id, block_hash in current_state.items():
-            if block_id not in last_state or last_state[block_id] != block_hash:
-                logging.info(f"Detected change in block: {block_id}")
-                # Would need to retrieve the specific block here
-                # For now, we'll return all blocks if any changes detected
-                changed_blocks = self.get_all_blocks()
-                break
+        for block in current_blocks:
+            block_hash = self._calculate_block_hash(block)
+            
+            if block.block_id not in last_state or last_state[block.block_id] != block_hash:
+                logging.info(f"Detected change in block: {block.block_id}")
+                changed_blocks.append(block)
+        
+        # Also check for blocks that exist in last_state but not in current_state
+        # (these are deleted blocks - we might want to handle them separately)
+        current_block_ids = {block.block_id for block in current_blocks}
+        deleted_block_ids = set(last_state.keys()) - current_block_ids
+        
+        if deleted_block_ids:
+            logging.info(f"Detected {len(deleted_block_ids)} deleted blocks: {list(deleted_block_ids)[:5]}...")
         
         self._save_current_state(current_state)
         
@@ -139,6 +147,11 @@ class LogseqEDNImporter(BaseImporter):
             if edn_file not in edn_files:
                 edn_files.append(edn_file)
         
+        # For testing: also look for JSON files
+        for json_file in self.logseq_db_path.rglob("*.json"):
+            if json_file not in edn_files:
+                edn_files.append(json_file)
+        
         return edn_files
     
     def _parse_edn_file(self, edn_file: Path) -> List[CanonicalBlock]:
@@ -157,14 +170,19 @@ class LogseqEDNImporter(BaseImporter):
             with open(edn_file, 'r', encoding='utf-8') as f:
                 content = f.read()
                 
-            # Parse the EDN content
+            # Parse the content (EDN or JSON)
             try:
-                if EDN_AVAILABLE and edn_format:
+                if edn_file.suffix.lower() == '.json':
+                    # Parse as JSON directly
+                    edn_data = json.loads(content)
+                    logging.info(f"Parsed {edn_file} as JSON")
+                elif EDN_AVAILABLE and edn_format:
                     edn_data = edn_format.loads(content)  # type: ignore
+                    logging.info(f"Parsed {edn_file} as EDN")
                 else:
                     raise ImportError("EDN format not available")
             except Exception as e:
-                logging.warning(f"Failed to parse EDN format in {edn_file}: {e}")
+                logging.warning(f"Failed to parse {edn_file.suffix} format in {edn_file}: {e}")
                 logging.info("Attempting to parse as JSON-like format...")
                 # Fallback: try to parse as JSON if EDN parsing fails
                 try:
@@ -356,7 +374,7 @@ class LogseqEDNImporter(BaseImporter):
         return blocks
     
     def _calculate_current_state(self) -> Dict[str, str]:
-        """Calculate current state of the database for change detection."""
+        """Calculate current state of the database for change detection (legacy method)."""
         state = {}
         
         edn_files = self._find_edn_files()
@@ -370,6 +388,69 @@ class LogseqEDNImporter(BaseImporter):
                 logging.warning(f"Failed to hash file {edn_file}: {e}")
                 
         return state
+    
+    def _calculate_block_state(self, blocks: List[CanonicalBlock]) -> Dict[str, str]:
+        """
+        Calculate state of individual blocks for change detection.
+        
+        Args:
+            blocks: List of CanonicalBlock objects
+            
+        Returns:
+            Dictionary mapping block_id to block_hash
+        """
+        state = {}
+        
+        for block in blocks:
+            block_hash = self._calculate_block_hash(block)
+            state[block.block_id] = block_hash
+            
+        return state
+    
+    def _calculate_block_hash(self, block: CanonicalBlock) -> str:
+        """
+        Calculate a hash for a CanonicalBlock to detect changes.
+        
+        Args:
+            block: CanonicalBlock to hash
+            
+        Returns:
+            SHA-256 hash of the block's content and structure
+        """
+        # Create a canonical representation of the block
+        block_data = {
+            'block_id': block.block_id,
+            'source_ref': block.source_ref,
+            'content': block.content,
+            'children': self._serialize_children(block.children)
+        }
+        
+        # Convert to JSON and hash
+        block_json = json.dumps(block_data, sort_keys=True)
+        return hashlib.sha256(block_json.encode('utf-8')).hexdigest()
+    
+    def _serialize_children(self, children: List[CanonicalBlock]) -> List[Dict[str, Any]]:
+        """
+        Serialize children blocks for hashing.
+        
+        Args:
+            children: List of child CanonicalBlock objects
+            
+        Returns:
+            List of serialized child blocks
+        """
+        serialized = []
+        
+        for child in children:
+            child_data = {
+                'block_id': child.block_id,
+                'source_ref': child.source_ref,
+                'content': child.content,
+                'children': self._serialize_children(child.children)
+            }
+            serialized.append(child_data)
+            
+        return serialized
     
     def _load_last_state(self) -> Optional[Dict[str, str]]:
         """Load the last recorded state."""

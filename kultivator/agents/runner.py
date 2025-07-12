@@ -193,18 +193,50 @@ Remember to output only valid JSON."""
             logging.error(f"Triage Agent failed: {e}")
             return TriageResult(entities=[], summary="Error processing content")
     
-    def run_synthesizer_agent(self, entity: Entity, summary: str) -> str:
+    def run_synthesizer_agent(self, entity: Entity, summary: str, existing_content: Optional[str] = None) -> str:
         """
-        Run the Synthesizer Agent to generate wiki content for an entity.
+        Run the Synthesizer Agent to generate or update wiki content for an entity.
         
         Args:
             entity: The entity to generate content for
-            summary: Summary of information about the entity
+            summary: Summary of new information about the entity
+            existing_content: Optional existing content to merge with new information
             
         Returns:
-            Generated Markdown content for the entity's wiki page
+            Generated or updated Markdown content for the entity's wiki page
         """
-        system_prompt = """You are a meticulous archivist. Your task is to create a comprehensive wiki page for an entity based on the provided information. 
+        if existing_content:
+            # Merge mode: Update existing content with new information
+            system_prompt = """You are a meticulous archivist. Your task is to update an existing wiki page with new information while preserving the existing structure and content.
+
+Guidelines for content merging:
+1. Preserve the existing title and overall structure
+2. Add new information to appropriate sections
+3. If new information contradicts existing content, note both versions
+4. Add specific details (dates, names, numbers) to a "Details" section
+5. Maintain consistent Markdown formatting
+6. Keep a neutral, encyclopedic tone
+7. Add an "Updates" section if significant new information is added
+
+Do not duplicate existing information. Focus on integrating new details seamlessly.
+Do not include any metadata or front matter - just the updated Markdown content."""
+
+            prompt = f"""Update this existing wiki page with new information:
+
+Entity Name: {entity.name}
+Entity Type: {entity.entity_type}
+
+EXISTING CONTENT:
+{existing_content}
+
+NEW INFORMATION:
+{summary}
+
+Generate the complete updated Markdown page, preserving existing content while seamlessly integrating the new information."""
+
+        else:
+            # Creation mode: Generate new content from scratch
+            system_prompt = """You are a meticulous archivist. Your task is to create a comprehensive wiki page for an entity based on the provided information. 
 
 Write a complete, well-structured Markdown page that includes:
 1. A clear title using the entity name
@@ -218,7 +250,7 @@ Write in a neutral, encyclopedic tone suitable for a personal knowledge base.
 
 Do not include any metadata or front matter - just the Markdown content."""
 
-        prompt = f"""Create a wiki page for this entity:
+            prompt = f"""Create a wiki page for this entity:
 
 Entity Name: {entity.name}
 Entity Type: {entity.entity_type}
@@ -245,7 +277,23 @@ Generate a complete Markdown page with proper structure and formatting."""
         except Exception as e:
             logging.error(f"Synthesizer Agent failed for {entity.name}: {e}")
             # Return a basic fallback content
-            return f"""# {entity.name}
+            if existing_content:
+                # If we have existing content, preserve it and add a note about the update
+                return f"""{existing_content}
+
+---
+
+## Update Note
+
+*New information could not be processed due to an error: {str(e)}*
+
+**New Information:** {summary}
+
+*This update was attempted on {logging.Formatter().formatTime(logging.LogRecord('', 0, '', 0, '', (), None))}*
+"""
+            else:
+                # Return basic new content
+                return f"""# {entity.name}
 
 *Type: {entity.entity_type.title()}*
 

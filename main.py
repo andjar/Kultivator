@@ -454,6 +454,13 @@ def run_bootstrap_pipeline(importer_type: str, logseq_path: str | None = None):
             else:
                 logging.error("Failed to create bootstrap commit")
             
+            # Save importer state to coordinate with future incremental runs
+            if isinstance(importer, LogseqEDNImporter):
+                logging.info("Saving importer state for future incremental runs...")
+                current_blocks = importer.get_all_blocks()
+                current_state = importer._calculate_block_state(current_blocks)
+                importer._save_current_state(current_state)
+            
             # Summary of results
             all_entities = db.list_entities()
             entity_types = {}
@@ -469,6 +476,184 @@ def run_bootstrap_pipeline(importer_type: str, logseq_path: str | None = None):
             logging.info(f"Repository status: {repo_status}")
 
 
+def run_incremental_pipeline(importer_type: str, logseq_path: str | None = None):
+    """
+    Execute the EPOCH 4 incremental pipeline: detect changes and update wiki.
+    
+    Args:
+        importer_type: Type of importer to use ('mock' or 'logseq')
+        logseq_path: Path to Logseq database (if using logseq importer)
+    """
+    logging.info("Starting Kultivator EPOCH 4 incremental pipeline...")
+    
+    # Initialize components
+    logging.info("Initializing components...")
+    
+    # Initialize importer
+    if importer_type == "mock":
+        importer = MockImporter()
+    elif importer_type == "logseq":
+        if logseq_path is None:
+            # Use default sample path for testing
+            logseq_path = "./sample_logseq_data"
+        importer = LogseqEDNImporter(logseq_path)
+    else:
+        raise ValueError(f"Unknown importer type: {importer_type}")
+    
+    # Initialize version manager
+    version_manager = VersionManager("wiki")
+    
+    # Check if repository exists
+    if not version_manager._is_git_repository():
+        logging.error("No Git repository found. Please run --bootstrap first.")
+        print("❌ No Git repository found. Please run bootstrap first:")
+        print("   python main.py --importer logseq --bootstrap")
+        return
+    
+    # Initialize database
+    with DatabaseManager() as db:
+        db.initialize_database()
+        
+        # Get changed blocks only (this is the key difference from bootstrap)
+        changed_blocks = importer.get_changed_blocks()
+        
+        if not changed_blocks:
+            logging.info("No changes detected. Nothing to process.")
+            print("✅ No changes detected. Your knowledge base is up to date.")
+            return
+        
+        logging.info(f"Found {len(changed_blocks)} changed blocks to process")
+        
+        # Initialize agent runner
+        with AgentRunner() as agent_runner:
+            processed_blocks = 0
+            updated_entities = 0
+            
+            # Process each changed block
+            for i, block in enumerate(changed_blocks, 1):
+                logging.info(f"Processing changed block {i}/{len(changed_blocks)}: {block.source_ref}")
+                
+                try:
+                    # Run triage agent to extract entities
+                    triage_result = agent_runner.run_triage_agent(block)
+                    
+                    logging.info(f"Found {len(triage_result.entities)} entities")
+                    logging.info(f"Summary: {triage_result.summary}")
+                    
+                    # Process each discovered entity
+                    for entity in triage_result.entities:
+                        logging.info(f"Processing entity: {entity.name} ({entity.entity_type})")
+                        
+                        # Check if entity already exists
+                        existing_entity = db.get_entity(entity.name)
+                        
+                        if existing_entity:
+                            # Update existing entity
+                            logging.info(f"Updating existing entity: {entity.name}")
+                            wiki_path = existing_entity.wiki_path
+                            
+                            if wiki_path is None:
+                                # If no wiki path, create one
+                                wiki_path = get_entity_wiki_path(existing_entity)
+                                existing_entity.wiki_path = wiki_path
+                                db.add_entity(existing_entity)  # Update with new path
+                            
+                            # Read existing content
+                            existing_content = ""
+                            wiki_path_obj = Path(wiki_path)
+                            if wiki_path_obj.exists():
+                                with open(wiki_path_obj, 'r', encoding='utf-8') as f:
+                                    existing_content = f.read()
+                            
+                            # Generate merged content using Synthesizer Agent
+                            logging.info(f"Merging new content for {entity.name}...")
+                            try:
+                                # Use enhanced Synthesizer Agent with existing content
+                                merged_content = agent_runner.run_synthesizer_agent(
+                                    entity, 
+                                    triage_result.summary, 
+                                    existing_content=existing_content
+                                )
+                                
+                                create_wiki_file_with_content(entity, wiki_path, merged_content)
+                                logging.info(f"Updated content for {entity.name}")
+                                updated_entities += 1
+                                
+                                # Create atomic commit for this entity update
+                                success = version_manager.create_incremental_commit(
+                                    entity.name, block.block_id, "update"
+                                )
+                                if success:
+                                    logging.info(f"Created incremental commit for {entity.name}")
+                                
+                            except Exception as e:
+                                logging.error(f"Failed to merge content for {entity.name}: {e}")
+                                
+                        else:
+                            # Create new entity
+                            logging.info(f"Creating new entity: {entity.name}")
+                            
+                            # Determine wiki path
+                            wiki_path = get_entity_wiki_path(entity)
+                            entity.wiki_path = wiki_path
+                            
+                            # Add entity to database
+                            success = db.add_entity(entity)
+                            if success:
+                                logging.info(f"Added new entity {entity.name} to database")
+                                updated_entities += 1
+                                
+                                # Generate content using Synthesizer Agent
+                                logging.info(f"Generating content for new entity {entity.name}...")
+                                try:
+                                    wiki_content = agent_runner.run_synthesizer_agent(entity, triage_result.summary)
+                                    create_wiki_file_with_content(entity, wiki_path, wiki_content)
+                                    logging.info(f"Generated content for new entity {entity.name}")
+                                    
+                                    # Create atomic commit for this new entity
+                                    success = version_manager.create_incremental_commit(
+                                        entity.name, block.block_id, "create"
+                                    )
+                                    if success:
+                                        logging.info(f"Created incremental commit for new entity {entity.name}")
+                                    
+                                except Exception as e:
+                                    logging.error(f"Failed to generate content for {entity.name}: {e}")
+                                    # Fall back to placeholder
+                                    create_placeholder_wiki_file(entity, wiki_path)
+                                    
+                            else:
+                                logging.warning(f"Failed to add entity {entity.name} to database")
+                        
+                        # Create/update entity mention record
+                        if db.connection:
+                            # Check if mention already exists
+                            existing_mention = db.connection.execute("""
+                                SELECT COUNT(*) FROM entity_mentions 
+                                WHERE block_id = ? AND entity_name = ?
+                            """, [block.block_id, entity.name]).fetchone()
+                            
+                            if existing_mention and existing_mention[0] == 0:
+                                db.connection.execute("""
+                                    INSERT INTO entity_mentions (block_id, entity_name)
+                                    VALUES (?, ?)
+                                """, [block.block_id, entity.name])
+                    
+                    # Record that this block has been processed
+                    db.add_processed_block(block)
+                    processed_blocks += 1
+                    
+                except Exception as e:
+                    logging.error(f"Error processing block {block.block_id}: {e}")
+                    continue
+                    
+            logging.info(f"Incremental update completed. Processed {processed_blocks} blocks and updated {updated_entities} entities.")
+            
+            # Repository status
+            repo_status = version_manager.get_repository_status()
+            logging.info(f"Repository status: {repo_status}")
+
+
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -476,7 +661,8 @@ def parse_arguments():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py                                  # Run with mock data (EPOCH 2 mode)
+  python main.py                                  # Run incremental update (EPOCH 4 mode)
+  python main.py --importer logseq                # Run incremental update with Logseq
   python main.py --importer logseq --bootstrap   # Bootstrap with sample Logseq data
   python main.py --importer logseq --bootstrap --logseq-path /path/to/logseq  # Bootstrap with real Logseq data
         """
@@ -546,23 +732,25 @@ def main():
             print(f"\nBootstrap failed: {e}")
             sys.exit(1)
     else:
-        logging.info("EPOCH 2: The Synthesizer & Content Generation")
+        logging.info("EPOCH 4: The Living System - Incremental Updates")
         
         try:
-            run_epoch2_pipeline()
+            run_incremental_pipeline(args.importer, args.logseq_path)
             
             print("\n" + "="*60)
-            print("EPOCH 2 PIPELINE COMPLETED SUCCESSFULLY!")
+            print("🎉 EPOCH 4 INCREMENTAL UPDATE COMPLETED SUCCESSFULLY!")
             print("="*60)
             print("\nResults:")
-            print("- Mock data processed through Triage Agent")
-            print("- Entities discovered and stored in kultivator.db")
-            print("- AI-generated content written to wiki files")
+            print("- Changed blocks detected and processed")
+            print("- Existing entities updated with new information")
+            print("- New entities discovered and added to knowledge base")
+            print("- Atomic commits created for each update")
             print("\nCheck the following:")
-            print("- kultivator.db for entity records")
-            print("- wiki/ directories for generated .md files with content")
+            print("- kultivator.db for updated entity records")
+            print("- wiki/ directories for updated .md files")
+            print("- Git log for incremental commits")
             print("- kultivator.log for detailed processing logs")
-            print("\nTip: Use --bootstrap flag for full processing with Git versioning")
+            print("\nTip: Use --bootstrap flag for full reprocessing from scratch")
             
         except KeyboardInterrupt:
             logging.info("Pipeline interrupted by user")
