@@ -275,6 +275,10 @@ track incremental updates and changes."""
         Returns:
             True if commit was successful, False otherwise
         """
+        if not self.repo:
+            logging.error("Repository not initialized")
+            return False
+            
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         message = f"""AI: {action.title()} {entity_name}

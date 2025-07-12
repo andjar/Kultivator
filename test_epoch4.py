@@ -44,20 +44,48 @@ def setup_logging():
 
 def cleanup_test_files():
     """Clean up test files from previous runs."""
+    import gc
+    import time
+    
+    # Force garbage collection to release file handles
+    gc.collect()
+    time.sleep(0.1)  # Give Windows a moment to release file locks
+    
     paths_to_clean = [
         Path("wiki"),
         Path("kultivator.db"),
         Path("logseq_last_state.json"),
         Path("kultivator.log"),
-        Path("test_logseq_data")
+        Path("test_logseq_data"),
+        Path(".kultivator_state.json")
     ]
     
     for path in paths_to_clean:
         if path.exists():
             if path.is_dir():
-                shutil.rmtree(path)
+                try:
+                    shutil.rmtree(path)
+                except PermissionError:
+                    # Windows file locking issue - try again after a short delay
+                    time.sleep(0.2)
+                    try:
+                        shutil.rmtree(path)
+                    except Exception as e:
+                        print(f"Warning: Could not remove directory {path}: {e}")
+                except Exception:
+                    pass
             else:
-                path.unlink()
+                try:
+                    path.unlink()
+                except PermissionError:
+                    # Windows file locking issue - try again after a short delay
+                    time.sleep(0.2)
+                    try:
+                        path.unlink()
+                    except Exception as e:
+                        print(f"Warning: Could not remove file {path}: {e}")
+                except Exception:
+                    pass
     
     print("Cleaned up test files")
 

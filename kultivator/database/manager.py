@@ -7,6 +7,7 @@ This module handles all database operations using DuckDB for state tracking.
 import duckdb
 import hashlib
 import json
+import logging
 from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
@@ -75,11 +76,27 @@ class DatabaseManager:
             )
         """)
         
+        # Drop entity_mentions table if it exists with old schema and recreate
+        try:
+            # Check if table exists and has the old schema (with mention_id column)
+            result = self.connection.execute("""
+                SELECT column_name FROM information_schema.columns 
+                WHERE table_name = 'entity_mentions' AND column_name = 'mention_id'
+            """).fetchall()
+            
+            if result:
+                # Table exists with old schema, drop it
+                logging.info("Dropping entity_mentions table with old schema")
+                self.connection.execute("DROP TABLE IF EXISTS entity_mentions")
+        except:
+            # If information_schema doesn't work, try to drop anyway
+            pass
+        
         self.connection.execute("""
             CREATE TABLE IF NOT EXISTS entity_mentions (
-                mention_id INTEGER PRIMARY KEY,
                 block_id VARCHAR NOT NULL,
                 entity_name VARCHAR NOT NULL,
+                PRIMARY KEY (block_id, entity_name),
                 FOREIGN KEY (block_id) REFERENCES processed_blocks(block_id),
                 FOREIGN KEY (entity_name) REFERENCES entities(entity_name)
             )
@@ -237,4 +254,33 @@ class DatabaseManager:
             return True
             
         # Check if content has changed
-        return result[0] != current_hash 
+        return result[0] != current_hash
+    
+    def add_entity_mention(self, block_id: str, entity_name: str) -> bool:
+        """
+        Add an entity mention record.
+        
+        Args:
+            block_id: The ID of the block containing the mention
+            entity_name: The name of the entity mentioned
+            
+        Returns:
+            True if mention was added, False if it already existed
+        """
+        if not self.connection:
+            raise RuntimeError("Database connection not established")
+            
+        try:
+            # Insert new mention (will fail if duplicate due to primary key constraint)
+            self.connection.execute("""
+                INSERT INTO entity_mentions (block_id, entity_name)
+                VALUES (?, ?)
+            """, [block_id, entity_name])
+            return True
+            
+        except duckdb.IntegrityError:
+            # Mention already exists (duplicate primary key)
+            return False
+        except Exception as e:
+            logging.error(f"Failed to add entity mention: {e}")
+            return False 

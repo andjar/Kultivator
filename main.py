@@ -393,6 +393,10 @@ def run_bootstrap_pipeline(importer_type: str, logseq_path: str | None = None):
                     logging.info(f"Found {len(triage_result.entities)} entities")
                     logging.info(f"Summary: {triage_result.summary}")
                     
+                    # Record that this block has been processed FIRST (required for foreign key constraints)
+                    db.add_processed_block(block)
+                    processed_blocks += 1
+                    
                     # Process each discovered entity
                     for entity in triage_result.entities:
                         logging.info(f"Processing entity: {entity.name} ({entity.entity_type})")
@@ -421,12 +425,8 @@ def run_bootstrap_pipeline(importer_type: str, logseq_path: str | None = None):
                                 create_wiki_file_with_content(entity, wiki_path, wiki_content)
                                 logging.info(f"Generated content for {entity.name}")
                                 
-                                # Create entity mention record
-                                if db.connection:
-                                    db.connection.execute("""
-                                        INSERT INTO entity_mentions (block_id, entity_name)
-                                        VALUES (?, ?)
-                                    """, [block.block_id, entity.name])
+                                # Create entity mention record (block must be processed first)
+                                db.add_entity_mention(block.block_id, entity.name)
                                 
                             except Exception as e:
                                 logging.error(f"Failed to generate content for {entity.name}: {e}")
@@ -435,10 +435,6 @@ def run_bootstrap_pipeline(importer_type: str, logseq_path: str | None = None):
                                 
                         else:
                             logging.warning(f"Failed to add entity {entity.name} to database")
-                    
-                    # Record that this block has been processed
-                    db.add_processed_block(block)
-                    processed_blocks += 1
                     
                 except Exception as e:
                     logging.error(f"Error processing block {block.block_id}: {e}")
@@ -510,6 +506,11 @@ def run_incremental_pipeline(importer_type: str, logseq_path: str | None = None)
         print("   python main.py --importer logseq --bootstrap")
         return
     
+    # Initialize the repository connection
+    if not version_manager.initialize_repository():
+        logging.error("Failed to initialize Git repository connection")
+        return
+    
     # Initialize database
     with DatabaseManager() as db:
         db.initialize_database()
@@ -539,6 +540,10 @@ def run_incremental_pipeline(importer_type: str, logseq_path: str | None = None)
                     
                     logging.info(f"Found {len(triage_result.entities)} entities")
                     logging.info(f"Summary: {triage_result.summary}")
+                    
+                    # Record that this block has been processed FIRST (required for foreign key constraints)
+                    db.add_processed_block(block)
+                    processed_blocks += 1
                     
                     # Process each discovered entity
                     for entity in triage_result.entities:
@@ -626,22 +631,7 @@ def run_incremental_pipeline(importer_type: str, logseq_path: str | None = None)
                                 logging.warning(f"Failed to add entity {entity.name} to database")
                         
                         # Create/update entity mention record
-                        if db.connection:
-                            # Check if mention already exists
-                            existing_mention = db.connection.execute("""
-                                SELECT COUNT(*) FROM entity_mentions 
-                                WHERE block_id = ? AND entity_name = ?
-                            """, [block.block_id, entity.name]).fetchone()
-                            
-                            if existing_mention and existing_mention[0] == 0:
-                                db.connection.execute("""
-                                    INSERT INTO entity_mentions (block_id, entity_name)
-                                    VALUES (?, ?)
-                                """, [block.block_id, entity.name])
-                    
-                    # Record that this block has been processed
-                    db.add_processed_block(block)
-                    processed_blocks += 1
+                        db.add_entity_mention(block.block_id, entity.name)
                     
                 except Exception as e:
                     logging.error(f"Error processing block {block.block_id}: {e}")

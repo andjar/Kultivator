@@ -18,7 +18,7 @@ class AgentRunner:
     Manages communication with Ollama and runs AI agents.
     """
     
-    def __init__(self, ollama_host: str = "http://localhost:11434", model: str = "llama3.2"):
+    def __init__(self, ollama_host: str = "http://localhost:11434", model: str = "gemma3"):
         """
         Initialize the agent runner.
         
