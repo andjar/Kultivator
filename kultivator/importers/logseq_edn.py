@@ -192,16 +192,38 @@ class LogseqEDNImporter(BaseImporter):
                     return blocks
             
             # Convert EDN data to CanonicalBlock objects
-            if isinstance(edn_data, list):
-                for item in edn_data:
-                    if isinstance(item, dict):
-                        block = self._convert_edn_item_to_block(item, edn_file)
-                        if block:
-                            blocks.append(block)
-            elif isinstance(edn_data, dict):
-                block = self._convert_edn_item_to_block(edn_data, edn_file)
-                if block:
-                    blocks.append(block)
+            # Handle LogSeq's :pages-and-blocks structure (works with EDN ImmutableDict)
+            try:
+                if hasattr(edn_data, '__getitem__') and ':pages-and-blocks' in edn_data:
+                    # Handle LogSeq's :pages-and-blocks structure
+                    pages_and_blocks = edn_data[':pages-and-blocks']
+                    for page_data in pages_and_blocks:
+                        if hasattr(page_data, '__getitem__') and ':page' in page_data and ':blocks' in page_data:
+                            page_info = page_data[':page']
+                            page_blocks = page_data[':blocks']
+                            
+                            # Create blocks from the page's blocks
+                            for block_item in page_blocks:
+                                block = self._convert_logseq_block_to_canonical(block_item, page_info, edn_file)
+                                if block:
+                                    blocks.append(block)
+                elif isinstance(edn_data, list):
+                    for item in edn_data:
+                        if isinstance(item, dict):
+                            block = self._convert_edn_item_to_block(item, edn_file)
+                            if block:
+                                blocks.append(block)
+                elif isinstance(edn_data, dict):
+                    block = self._convert_edn_item_to_block(edn_data, edn_file)
+                    if block:
+                        blocks.append(block)
+            except (TypeError, KeyError, AttributeError) as e:
+                logging.warning(f"Error processing EDN structure in {edn_file}: {e}")
+                # Fall back to treating as generic dict if LogSeq structure fails
+                if isinstance(edn_data, dict):
+                    block = self._convert_edn_item_to_block(edn_data, edn_file)
+                    if block:
+                        blocks.append(block)
                     
         except Exception as e:
             logging.error(f"Error parsing EDN file {edn_file}: {e}")
@@ -253,6 +275,77 @@ class LogseqEDNImporter(BaseImporter):
             
         except Exception as e:
             logging.warning(f"Failed to convert EDN item to block: {e}")
+            return None
+    
+    def _convert_logseq_block_to_canonical(self, block_item: Dict[str, Any], page_info: Dict[str, Any], source_file: Path) -> Optional[CanonicalBlock]:
+        """
+        Convert a LogSeq block from the :pages-and-blocks structure to a CanonicalBlock.
+        
+        Args:
+            block_item: The LogSeq block data
+            page_info: The page metadata this block belongs to
+            source_file: Source file for reference
+            
+        Returns:
+            CanonicalBlock object or None if conversion fails
+        """
+        try:
+            # Generate block ID from LogSeq block data
+            block_uuid = block_item.get('block/uuid', block_item.get(':block/uuid'))
+            if block_uuid:
+                block_id = str(block_uuid)
+            else:
+                block_id = f"block_{hash(str(block_item))}"
+            
+            # Extract content from LogSeq block structure
+            content = (
+                block_item.get(':block/title', '') or
+                block_item.get('block/title', '') or 
+                block_item.get(':block/content', '') or
+                block_item.get('block/content', '') or
+                str(block_item)
+            )
+            
+            # Clean up content
+            if not isinstance(content, str):
+                content = str(content)
+            
+            # Skip empty or meaningless content
+            if not content or content.strip() == '' or content == str(block_item):
+                return None
+            
+            # Create source reference with page title if available
+            page_title = page_info.get(':block/title', page_info.get('block/title', 'unknown'))
+            if page_title and page_title != 'unknown':
+                source_ref = f"{source_file.name}#{page_title}#{block_id}"
+            else:
+                source_ref = f"{source_file.name}#{block_id}"
+            
+            # Handle children blocks
+            children = []
+            children_data = (
+                block_item.get('build/children', []) or 
+                block_item.get(':build/children', []) or
+                block_item.get('block/children', []) or
+                block_item.get(':block/children', [])
+            )
+            
+            if children_data:
+                for child_item in children_data:
+                    if isinstance(child_item, dict):
+                        child_block = self._convert_logseq_block_to_canonical(child_item, page_info, source_file)
+                        if child_block:
+                            children.append(child_block)
+            
+            return CanonicalBlock(
+                block_id=block_id,
+                source_ref=source_ref,
+                content=content,
+                children=children
+            )
+            
+        except Exception as e:
+            logging.warning(f"Failed to convert LogSeq block to canonical: {e}")
             return None
     
     def _create_sample_logseq_blocks(self) -> List[CanonicalBlock]:
