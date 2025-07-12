@@ -7,6 +7,7 @@ used for processing and synthesis.
 
 import httpx
 import json
+import time
 from typing import Dict, Any, Optional, List
 import logging
 
@@ -84,17 +85,34 @@ class AgentRunner:
         except Exception as e:
             raise Exception(f"Unexpected error calling Ollama: {e}")
             
-    def _call_ollama_sync(self, prompt: str, system_prompt: str = "") -> str:
+    def _call_ollama_sync(
+        self, 
+        prompt: str, 
+        system_prompt: str = "",
+        agent_name: str = "unknown",
+        input_data: str = "",
+        block_id: Optional[str] = None,
+        entity_name: Optional[str] = None
+    ) -> str:
         """
-        Synchronous wrapper for Ollama calls.
+        Synchronous wrapper for Ollama calls with AI logging.
         
         Args:
             prompt: The user prompt
             system_prompt: Optional system prompt for agent persona
+            agent_name: Name of the agent making the call
+            input_data: Original input data for logging
+            block_id: Related block ID (optional)
+            entity_name: Related entity name (optional)
             
         Returns:
             The model's response text
         """
+        start_time = time.time()
+        success = False
+        error_message = None
+        raw_response = ""
+        
         try:
             payload = {
                 "model": self.model,
@@ -112,14 +130,41 @@ class AgentRunner:
             response.raise_for_status()
             
             result = response.json()
-            return result.get("response", "")
+            raw_response = result.get("response", "")
+            success = True
+            
+            return raw_response
             
         except httpx.RequestError as e:
-            raise Exception(f"Failed to connect to Ollama: {e}")
+            error_message = f"Failed to connect to Ollama: {e}"
+            raise Exception(error_message)
         except httpx.HTTPStatusError as e:
-            raise Exception(f"Ollama request failed: {e}")
+            error_message = f"Ollama request failed: {e}"
+            raise Exception(error_message)
         except Exception as e:
-            raise Exception(f"Unexpected error calling Ollama: {e}")
+            error_message = f"Unexpected error calling Ollama: {e}"
+            raise Exception(error_message)
+        finally:
+            # Log the AI call to database for reproducibility
+            execution_time_ms = int((time.time() - start_time) * 1000)
+            
+            if self.db:
+                try:
+                    self.db.log_ai_agent_call(
+                        agent_name=agent_name,
+                        input_data=input_data,
+                        system_prompt=system_prompt,
+                        user_prompt=prompt,
+                        model_name=self.model,
+                        raw_response=raw_response,
+                        success=success,
+                        error_message=error_message,
+                        execution_time_ms=execution_time_ms,
+                        block_id=block_id,
+                        entity_name=entity_name
+                    )
+                except Exception as log_error:
+                    logging.warning(f"Failed to log AI agent call: {log_error}")
     
     def run_triage_agent(self, block: CanonicalBlock) -> TriageResult:
         """
@@ -149,7 +194,20 @@ Content: {content_text}
 Remember to output only valid JSON."""
 
         try:
-            response = self._call_ollama_sync(prompt, system_prompt)
+            # Format input data for logging
+            input_data = json.dumps({
+                "block_id": block.block_id,
+                "source_ref": block.source_ref,
+                "content": content_text
+            })
+            
+            response = self._call_ollama_sync(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                agent_name="triage",
+                input_data=input_data,
+                block_id=block.block_id
+            )
             
             # Try to parse the JSON response
             response = response.strip()
@@ -165,6 +223,26 @@ Remember to output only valid JSON."""
             response = response.strip()
             
             result_dict = json.loads(response)
+            
+            # Log parsed response for better reproducibility
+            if self.db and self.db.connection:
+                try:
+                    # Find the most recent call for this block to update with parsed response
+                    recent_calls = self.db.get_ai_agent_calls(
+                        agent_name="triage",
+                        block_id=block.block_id,
+                        limit=1
+                    )
+                    if recent_calls:
+                        call_id = recent_calls[0]["call_id"]
+                        # Update with parsed response
+                        self.db.connection.execute("""
+                            UPDATE ai_agent_calls 
+                            SET parsed_response = ? 
+                            WHERE call_id = ?
+                        """, [json.dumps(result_dict), call_id])
+                except Exception as log_error:
+                    logging.warning(f"Failed to log parsed triage response: {log_error}")
             
             # Convert to our data models
             entities = []
@@ -251,7 +329,21 @@ NEW INFORMATION:
 Generate a complete Markdown page with proper structure and formatting. Use the knowledge base context to create relevant cross-references where appropriate."""
 
         try:
-            response = self._call_ollama_sync(prompt, system_prompt)
+            # Format input data for logging
+            input_data = json.dumps({
+                "entity_name": entity.name,
+                "entity_type": entity.entity_type,
+                "summary": summary,
+                "has_existing_content": existing_content is not None
+            })
+            
+            response = self._call_ollama_sync(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                agent_name="synthesizer_merge" if existing_content else "synthesizer_create",
+                input_data=input_data,
+                entity_name=entity.name
+            )
             
             # Clean up the response
             response = response.strip()

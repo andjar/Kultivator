@@ -7,8 +7,9 @@ converting the hierarchical block structure into CanonicalBlock objects.
 
 import json
 import logging
+import re
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import hashlib
 import shutil
 from datetime import datetime
@@ -49,6 +50,7 @@ class LogseqEDNImporter(BaseImporter):
             logging.warning(f"Logseq database directory not found: {logseq_db_path}. Will use sample data.")
             
         logging.info(f"Initialized Logseq EDN importer for: {self.logseq_db_path}")
+        self.uuid_mappings: Dict[str, str] = {}
     
     def get_all_blocks(self) -> List[CanonicalBlock]:
         """
@@ -71,6 +73,18 @@ class LogseqEDNImporter(BaseImporter):
         for edn_file in edn_files:
             try:
                 logging.info(f"Parsing data file: {edn_file}")
+                
+                # Try data-driven approach first (for real LogSeq files)
+                try:
+                    uuid_mappings, blocks = self.extract_uuid_mappings_and_content(edn_file)
+                    if blocks:
+                        logging.info(f"Successfully used data-driven approach for {edn_file}")
+                        all_blocks.extend(blocks)
+                        continue
+                except Exception as e:
+                    logging.warning(f"Data-driven parsing failed for {edn_file}: {e}")
+                
+                # Fallback to legacy EDN parsing
                 blocks = self._parse_edn_file(edn_file)
                 all_blocks.extend(blocks)
             except Exception as e:
@@ -194,7 +208,7 @@ class LogseqEDNImporter(BaseImporter):
             # Convert EDN data to CanonicalBlock objects
             # Handle LogSeq's :pages-and-blocks structure (works with EDN ImmutableDict)
             try:
-                if hasattr(edn_data, '__getitem__') and ':pages-and-blocks' in edn_data:
+                if edn_data and hasattr(edn_data, '__getitem__') and ':pages-and-blocks' in edn_data:
                     # Handle LogSeq's :pages-and-blocks structure
                     pages_and_blocks = edn_data[':pages-and-blocks']
                     for page_data in pages_and_blocks:
@@ -561,4 +575,130 @@ class LogseqEDNImporter(BaseImporter):
             with open(self.last_state_file, 'w') as f:
                 json.dump(state, f, indent=2)
         except Exception as e:
-            logging.warning(f"Failed to save current state: {e}") 
+            logging.warning(f"Failed to save current state: {e}")
+    
+    def extract_uuid_mappings_and_content(self, edn_file: Path) -> Tuple[Dict[str, str], List[CanonicalBlock]]:
+        """
+        Extract UUID to page title mappings and content blocks from LogSeq EDN file.
+        This implements the data-driven approach developed in process_logseq_data.py.
+        
+        Args:
+            edn_file: Path to the EDN file to process
+            
+        Returns:
+            Tuple of (uuid_mappings, canonical_blocks)
+        """
+        with open(edn_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Extract UUID to page title mappings
+        uuid_mappings = {}
+        uuid_pattern = r':page[^}]*:block/uuid\s+#uuid\s+"([^"]+)"[^}]*:block/title\s+"([^"]+)"'
+        for match in re.finditer(uuid_pattern, content):
+            uuid, title = match.groups()
+            uuid_mappings[uuid] = title
+        
+        self.uuid_mappings = uuid_mappings
+        logging.info(f"Extracted {len(uuid_mappings)} UUID mappings")
+        
+        # Extract meaningful content blocks
+        block_titles = re.findall(r':block/title\s+"([^"]+)"', content)
+        page_titles = re.findall(r':page[^}]*:block/title\s+"([^"]+)"', content)
+        
+        blocks = []
+        block_id = 1
+        
+        # Process page titles as entities first (these are our main entities)
+        for title in page_titles:
+            # Skip system pages
+            if (title.startswith('$$$') or 
+                title in ['Contents', 'Library', 'Quick add'] or
+                title.startswith('202507')):  # Skip journal dates
+                continue
+                
+            blocks.append(CanonicalBlock(
+                block_id=f"page-{block_id}",
+                source_ref=f"{edn_file.name}#page-{title}",
+                content=title,
+                children=[]
+            ))
+            block_id += 1
+        
+        # Process block titles, but skip those that are already page entities
+        for title in block_titles:
+            # Skip system/metadata blocks and plain UUID references
+            if (title.startswith('$$$') or 
+                title in ['All', 'Contents', 'Library', 'Quick add', ''] or
+                re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', title)):
+                continue
+            
+            # Skip if this is already a page entity to avoid duplicates
+            if title in page_titles:
+                continue
+                
+            blocks.append(CanonicalBlock(
+                block_id=f"block-{block_id}",
+                source_ref=f"{edn_file.name}#block-{block_id}",
+                content=title,
+                children=[]
+            ))
+            block_id += 1
+        
+        logging.info(f"Extracted {len(blocks)} content blocks using data-driven approach")
+        return uuid_mappings, blocks
+    
+    def resolve_uuid_references(self, content: str) -> str:
+        """
+        Replace UUID references in content with readable page titles.
+        
+        Args:
+            content: Content that may contain UUID references
+            
+        Returns:
+            Content with UUID references replaced by readable names
+        """
+        resolved_content = content
+        for uuid, page_title in self.uuid_mappings.items():
+            resolved_content = resolved_content.replace(f"[[{uuid}]]", page_title)
+        return resolved_content
+    
+    def classify_entity_by_content(self, content: str) -> str:
+        """
+        Classify entity type based on Norwegian content patterns.
+        This implements the data-driven classification from process_logseq_data.py.
+        
+        Args:
+            content: The content to classify
+            
+        Returns:
+            Entity type classification
+        """
+        content_lower = content.lower()
+        
+        # Person names
+        if any(word in content_lower for word in ['nordmann']):
+            return "person"
+        elif any(name in content_lower for name in ['kari', 'ola', 'mariell']):
+            return "person"
+            
+        # Places
+        elif any(word in content_lower for word in ['oslo', 'børgefjell']):
+            return "place"
+            
+        # Projects
+        elif any(word in content_lower for word in ['prosjekt', 'isshp']):
+            return "project"
+            
+        # Food
+        elif any(word in content_lower for word in ['kake', 'jordbær']):
+            return "food"
+            
+        # Stores
+        elif any(word in content_lower for word in ['coop']):
+            return "store"
+            
+        # Events
+        elif any(word in content_lower for word in ['konferanse', 'conference']):
+            return "event"
+            
+        return "other" 

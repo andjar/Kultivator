@@ -9,7 +9,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime
 
 from ..models import Entity, ProcessedBlock, EntityMention, CanonicalBlock
@@ -97,6 +97,28 @@ class DatabaseManager:
                 block_id VARCHAR NOT NULL,
                 entity_name VARCHAR NOT NULL,
                 PRIMARY KEY (block_id, entity_name),
+                FOREIGN KEY (block_id) REFERENCES processed_blocks(block_id),
+                FOREIGN KEY (entity_name) REFERENCES entities(entity_name)
+            )
+        """)
+        
+        # AI Agent Call Logging table for EPOCH 6 (reproducibility)
+        self.connection.execute("""
+            CREATE TABLE IF NOT EXISTS ai_agent_calls (
+                call_id INTEGER PRIMARY KEY,
+                agent_name VARCHAR NOT NULL,
+                input_data TEXT NOT NULL,
+                system_prompt TEXT,
+                user_prompt TEXT NOT NULL,
+                model_name VARCHAR NOT NULL,
+                raw_response TEXT NOT NULL,
+                parsed_response TEXT,
+                success BOOLEAN NOT NULL,
+                error_message TEXT,
+                execution_time_ms INTEGER,
+                block_id VARCHAR,
+                entity_name VARCHAR,
+                called_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (block_id) REFERENCES processed_blocks(block_id),
                 FOREIGN KEY (entity_name) REFERENCES entities(entity_name)
             )
@@ -283,4 +305,172 @@ class DatabaseManager:
             return False
         except Exception as e:
             logging.error(f"Failed to add entity mention: {e}")
-            return False 
+            return False
+    
+    def log_ai_agent_call(
+        self, 
+        agent_name: str,
+        input_data: str,
+        system_prompt: Optional[str],
+        user_prompt: str,
+        model_name: str,
+        raw_response: str,
+        parsed_response: Optional[str] = None,
+        success: bool = True,
+        error_message: Optional[str] = None,
+        execution_time_ms: Optional[int] = None,
+        block_id: Optional[str] = None,
+        entity_name: Optional[str] = None
+    ) -> Optional[int]:
+        """
+        Log an AI agent call to the database for reproducibility.
+        
+        Args:
+            agent_name: Name of the agent that made the call
+            input_data: The input data passed to the agent
+            system_prompt: System prompt used
+            user_prompt: User prompt used
+            model_name: Name of the AI model used
+            raw_response: Raw response from the AI model
+            parsed_response: Parsed/processed response (optional)
+            success: Whether the call was successful
+            error_message: Error message if the call failed
+            execution_time_ms: Execution time in milliseconds
+            block_id: Related block ID (optional)
+            entity_name: Related entity name (optional)
+            
+        Returns:
+            The call_id of the logged call
+        """
+        if not self.connection:
+            raise RuntimeError("Database connection not established")
+            
+        result = self.connection.execute("""
+            INSERT INTO ai_agent_calls (
+                agent_name, input_data, system_prompt, user_prompt, model_name,
+                raw_response, parsed_response, success, error_message, 
+                execution_time_ms, block_id, entity_name
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING call_id
+        """, [
+            agent_name, input_data, system_prompt, user_prompt, model_name,
+            raw_response, parsed_response, success, error_message,
+            execution_time_ms, block_id, entity_name
+        ]).fetchone()
+        
+        return result[0] if result else None
+    
+    def get_ai_agent_calls(
+        self, 
+        agent_name: Optional[str] = None,
+        block_id: Optional[str] = None,
+        entity_name: Optional[str] = None,
+        success_only: bool = False,
+        limit: Optional[int] = None
+    ) -> List[Dict]:
+        """
+        Retrieve AI agent calls from the database.
+        
+        Args:
+            agent_name: Filter by agent name (optional)
+            block_id: Filter by block ID (optional)
+            entity_name: Filter by entity name (optional)
+            success_only: Only return successful calls
+            limit: Limit number of results
+            
+        Returns:
+            List of AI agent call records
+        """
+        if not self.connection:
+            raise RuntimeError("Database connection not established")
+            
+        query = """
+            SELECT call_id, agent_name, input_data, system_prompt, user_prompt,
+                   model_name, raw_response, parsed_response, success, error_message,
+                   execution_time_ms, block_id, entity_name, called_at
+            FROM ai_agent_calls
+            WHERE 1=1
+        """
+        params = []
+        
+        if agent_name:
+            query += " AND agent_name = ?"
+            params.append(agent_name)
+            
+        if block_id:
+            query += " AND block_id = ?"
+            params.append(block_id)
+            
+        if entity_name:
+            query += " AND entity_name = ?"
+            params.append(entity_name)
+            
+        if success_only:
+            query += " AND success = true"
+            
+        query += " ORDER BY called_at DESC"
+        
+        if limit:
+            query += f" LIMIT {limit}"
+            
+        results = self.connection.execute(query, params).fetchall()
+        
+        return [
+            {
+                "call_id": row[0],
+                "agent_name": row[1],
+                "input_data": row[2],
+                "system_prompt": row[3],
+                "user_prompt": row[4],
+                "model_name": row[5],
+                "raw_response": row[6],
+                "parsed_response": row[7],
+                "success": row[8],
+                "error_message": row[9],
+                "execution_time_ms": row[10],
+                "block_id": row[11],
+                "entity_name": row[12],
+                "called_at": row[13]
+            }
+            for row in results
+        ]
+    
+    def reproduce_ai_agent_call(self, call_id: int) -> Optional[Dict]:
+        """
+        Get all details needed to reproduce a specific AI agent call.
+        
+        Args:
+            call_id: The ID of the call to reproduce
+            
+        Returns:
+            Dictionary with all call details or None if not found
+        """
+        if not self.connection:
+            raise RuntimeError("Database connection not established")
+            
+        result = self.connection.execute("""
+            SELECT call_id, agent_name, input_data, system_prompt, user_prompt,
+                   model_name, raw_response, parsed_response, success, error_message,
+                   execution_time_ms, block_id, entity_name, called_at
+            FROM ai_agent_calls
+            WHERE call_id = ?
+        """, [call_id]).fetchone()
+        
+        if result:
+            return {
+                "call_id": result[0],
+                "agent_name": result[1],
+                "input_data": result[2],
+                "system_prompt": result[3],
+                "user_prompt": result[4],
+                "model_name": result[5],
+                "raw_response": result[6],
+                "parsed_response": result[7],
+                "success": result[8],
+                "error_message": result[9],
+                "execution_time_ms": result[10],
+                "block_id": result[11],
+                "entity_name": result[12],
+                "called_at": result[13]
+            }
+        return None 
