@@ -193,6 +193,75 @@ Remember to output only valid JSON."""
             logging.error(f"Triage Agent failed: {e}")
             return TriageResult(entities=[], summary="Error processing content")
     
+    def run_synthesizer_agent(self, entity: Entity, summary: str) -> str:
+        """
+        Run the Synthesizer Agent to generate wiki content for an entity.
+        
+        Args:
+            entity: The entity to generate content for
+            summary: Summary of information about the entity
+            
+        Returns:
+            Generated Markdown content for the entity's wiki page
+        """
+        system_prompt = """You are a meticulous archivist. Your task is to create a comprehensive wiki page for an entity based on the provided information. 
+
+Write a complete, well-structured Markdown page that includes:
+1. A clear title using the entity name
+2. Basic information about the entity type
+3. A summary section with key details
+4. A details section for additional information
+5. Proper Markdown formatting
+
+Keep the content informative but concise. Use proper Markdown headers, lists, and formatting. 
+Write in a neutral, encyclopedic tone suitable for a personal knowledge base.
+
+Do not include any metadata or front matter - just the Markdown content."""
+
+        prompt = f"""Create a wiki page for this entity:
+
+Entity Name: {entity.name}
+Entity Type: {entity.entity_type}
+Information: {summary}
+
+Generate a complete Markdown page with proper structure and formatting."""
+
+        try:
+            response = self._call_ollama_sync(prompt, system_prompt)
+            
+            # Clean up the response
+            response = response.strip()
+            
+            # Remove any markdown code block formatting if present
+            if response.startswith("```markdown"):
+                response = response[11:]
+            if response.startswith("```"):
+                response = response[3:]
+            if response.endswith("```"):
+                response = response[:-3]
+                
+            return response.strip()
+            
+        except Exception as e:
+            logging.error(f"Synthesizer Agent failed for {entity.name}: {e}")
+            # Return a basic fallback content
+            return f"""# {entity.name}
+
+*Type: {entity.entity_type.title()}*
+
+## Summary
+
+{summary}
+
+## Details
+
+*Additional information about {entity.name} will be added as it becomes available.*
+
+## Related Notes
+
+*This page was generated automatically by Kultivator.*
+"""
+    
     def _format_block_for_prompt(self, block: CanonicalBlock, indent: int = 0) -> str:
         """
         Format a canonical block and its children for AI processing.
