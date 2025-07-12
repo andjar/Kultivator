@@ -87,8 +87,8 @@ Thumbs.db
 Thumbs.db
 """)
                 
-                # Add and commit .gitignore
-                self.repo.index.add([str(gitignore_path)])
+                # Add and commit .gitignore (use relative path)
+                self.repo.index.add([".gitignore"])
                 self.repo.index.commit("Initial commit: Add .gitignore")
                 
             logging.info("Git repository initialized successfully")

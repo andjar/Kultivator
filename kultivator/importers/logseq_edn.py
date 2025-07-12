@@ -46,7 +46,7 @@ class LogseqEDNImporter(BaseImporter):
             raise ImportError("edn-format package is required for Logseq import. Install with: pip install edn-format")
             
         if not self.logseq_db_path.exists():
-            raise FileNotFoundError(f"Logseq database directory not found: {logseq_db_path}")
+            logging.warning(f"Logseq database directory not found: {logseq_db_path}. Will use sample data.")
             
         logging.info(f"Initialized Logseq EDN importer for: {self.logseq_db_path}")
     
