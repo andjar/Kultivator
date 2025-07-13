@@ -15,6 +15,7 @@ from kultivator.config import ConfigManager
 from kultivator.database import DatabaseManager
 from kultivator.models import CanonicalBlock, Entity, TriageResult
 from kultivator.agents.registry import AgentRegistry, AgentConfig
+from kultivator.importers.logseq_edn import LogseqEDNImporter
 
 
 class TestConfigManager(unittest.TestCase):
@@ -345,6 +346,41 @@ class TestUtilityFunctions(unittest.TestCase):
         self.assertIn("/People/", person_path)
         self.assertIn("/Projects/", project_path)
         self.assertIn("/Other/", unknown_path)  # Default for unknown types
+
+
+class TestLogseqRealData(unittest.TestCase):
+    def test_real_logseq_hierarchy(self):
+        """Test that real LogSeq data import skips empty pages and preserves top-level hierarchy."""
+        # Path to real LogSeq export
+        logseq_path = os.path.abspath("test_logseq_data")
+        importer = LogseqEDNImporter(logseq_path)
+        blocks = importer.get_all_blocks()
+        # 1. Ensure only the two journal pages with content are present
+        journal_titles = set()
+        for block in blocks:
+            # Print for manual inspection
+            print(f"[TEST] Top-level block: {block.block_id} | {block.content[:60]} | children: {len(block.children)}")
+            # Check for journal pages by looking for a date in the source_ref or content
+            if "20250712" in block.source_ref or "20250712" in block.content:
+                journal_titles.add("20250712")
+            if "20250713" in block.source_ref or "20250713" in block.content:
+                journal_titles.add("20250713")
+        self.assertEqual(len(blocks), 2, f"Expected 2 top-level journal pages, got {len(blocks)}")
+        self.assertEqual(journal_titles, {"20250712", "20250713"}, f"Expected journal pages 20250712 and 20250713, got {journal_titles}")
+        # 2. Ensure no child block appears as a top-level block
+        child_ids = set()
+        def collect_child_ids(b):
+            for c in b.children:
+                child_ids.add(c.block_id)
+                collect_child_ids(c)
+        for block in blocks:
+            collect_child_ids(block)
+        all_ids = set(b.block_id for b in blocks)
+        self.assertTrue(child_ids.isdisjoint(all_ids), "Some child blocks appear as top-level blocks!")
+        # 4. Print a summary for manual inspection
+        print(f"\n[TEST] Top-level blocks loaded: {len(blocks)}")
+        for block in blocks:
+            print(f"  - {block.block_id}: {block.content[:60]} (children: {len(block.children)})")
 
 
 if __name__ == '__main__':

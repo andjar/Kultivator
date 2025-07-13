@@ -374,6 +374,11 @@ def run_bootstrap_pipeline(importer_type: str, logseq_path: str | None = None):
         # Get all blocks
         blocks = importer.get_all_blocks()
         logging.info(f"Retrieved {len(blocks)} blocks")
+
+        # Hierarchy check: warn if any block looks like a child (block-*) but is at top level
+        suspicious_blocks = [b for b in blocks if b.block_id.startswith('block-') and b.children == []]
+        if suspicious_blocks:
+            logging.warning(f"[Hierarchy Check] {len(suspicious_blocks)} suspicious top-level blocks found (block_id starts with 'block-' and has no children). This may indicate a fallback/flattening issue. Example: {suspicious_blocks[0].block_id} - {suspicious_blocks[0].content}")
         
         # Initialize agent runner
         with AgentRunner(database_manager=db) as agent_runner:
