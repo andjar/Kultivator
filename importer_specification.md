@@ -15,7 +15,7 @@ The single most important contract an importer must fulfill is to convert source
 The `CanonicalBlock` is defined in `kultivator/models/canonical.py` using Pydantic.
 
 ```python
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel, Field
 
 class CanonicalBlock(BaseModel):
@@ -35,6 +35,16 @@ class CanonicalBlock(BaseModel):
     content: str = Field(
         ...,
         description="The text content of the top-level block/bullet"
+    )
+
+    created_at: Optional[int] = Field(
+        default=None,
+        description="The timestamp (seconds since epoch) when the block was created."
+    )
+
+    updated_at: Optional[int] = Field(
+        default=None,
+        description="The timestamp (seconds since epoch) when the block was last updated."
     )
 
     children: List['CanonicalBlock'] = Field(
@@ -57,6 +67,12 @@ class CanonicalBlock(BaseModel):
     -   This should be the "raw" text as a user would see it.
     -   If the source format uses special link syntax (e.g., `[[Page Title]]`), it should be preserved in the content.
 
+-   `created_at` **(int, optional)**: A Unix timestamp (seconds since epoch) indicating when the block was created.
+    -   If the source provides this information, it should be included. Otherwise, it can be `null`.
+
+-   `updated_at` **(int, optional)**: A Unix timestamp (seconds since epoch) indicating when the block was last updated.
+    -   This is crucial for incremental processing. If the source provides it, it must be included.
+
 -   `children` **(List\[CanonicalBlock], optional)**: A list of nested `CanonicalBlock` objects.
     -   This represents the hierarchical nature of outliners. If a block has sub-bullets, they become `children` of the parent block.
 
@@ -70,11 +86,15 @@ Here is an example of what a list of two `CanonicalBlock` objects would look lik
     "block_id": "664e1c2a-9f6b-4a3b-8b0a-1a2b3c4d5e6f",
     "source_ref": "journals/2024_05_22.md",
     "content": "Met with [[Jane Doe]] about [[Project Phoenix]].",
+    "created_at": 1653234567,
+    "updated_at": 1653234578,
     "children": [
       {
         "block_id": "a1b2c3d4-e5f6-7890-1234-567890abcdef",
         "source_ref": "journals/2024_05_22.md",
         "content": "Her birthday is on June 15th.",
+        "created_at": 1653234580,
+        "updated_at": 1653234580,
         "children": []
       }
     ]
@@ -83,6 +103,8 @@ Here is an example of what a list of two `CanonicalBlock` objects would look lik
     "block_id": "f0e9d8c7-b6a5-4321-fedc-ba9876543210",
     "source_ref": "pages/reading_list.md",
     "content": "Finished reading [[The Pragmatic Programmer]].",
+    "created_at": 1653123456,
+    "updated_at": 1653123456,
     "children": []
   }
 ]

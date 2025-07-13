@@ -5,7 +5,7 @@ This module defines the standardized internal data structures that all importers
 must convert their source data into.
 """
 
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -30,6 +30,16 @@ class CanonicalBlock(BaseModel):
     content: str = Field(
         ..., 
         description="The text content of the top-level block/bullet"
+    )
+
+    created_at: Optional[int] = Field(
+        default=None,
+        description="The timestamp (seconds since epoch) when the block was created."
+    )
+
+    updated_at: Optional[int] = Field(
+        default=None,
+        description="The timestamp (seconds since epoch) when the block was last updated."
     )
     
     children: List['CanonicalBlock'] = Field(

@@ -352,8 +352,13 @@ class TestLogseqRealData(unittest.TestCase):
     def test_real_logseq_hierarchy(self):
         """Test that real LogSeq data import skips empty pages and preserves top-level hierarchy."""
         # Path to real LogSeq export
-        logseq_path = os.path.abspath("test_logseq_data")
-        importer = LogseqEDNImporter(logseq_path)
+        test_dir = Path(__file__).parent
+        logseq_path = test_dir / "test_logseq_data"
+
+        if not logseq_path.exists():
+            self.skipTest(f"Test data directory not found: {logseq_path}")
+
+        importer = LogseqEDNImporter(str(logseq_path))
         blocks = importer.get_all_blocks()
         # 1. Ensure only the two journal pages with content are present
         journal_titles = set()
