@@ -67,6 +67,8 @@ class LogseqEDNImporter(BaseImporter):
                 data_to_parse = parsed_data[0]
             elif isinstance(parsed_data, collections.abc.Mapping):
                 data_to_parse = parsed_data
+            elif isinstance(parsed_data, edn_format.immutable_list.ImmutableList):
+                data_to_parse = parsed_data._list
             else:
                 logging.error(f"Parsed EDN data is not a recognized format. Expected a map or tuple, but got {type(parsed_data)}.")
                 return []
@@ -81,7 +83,10 @@ class LogseqEDNImporter(BaseImporter):
         return all_page_blocks
 
     def _parse_edn_data(self, edn_data: Any, source_filename: str) -> List[CanonicalBlock]:
-        pages_and_blocks_data = self._get_logseq_value(edn_data, 'pages-and-blocks')
+        if isinstance(edn_data, list):
+            pages_and_blocks_data = edn_data
+        else:
+            pages_and_blocks_data = self._get_logseq_value(edn_data, 'pages-and-blocks')
         
         is_valid_list = isinstance(pages_and_blocks_data, collections.abc.Sequence) and not isinstance(pages_and_blocks_data, str)
 
@@ -123,17 +128,12 @@ class LogseqEDNImporter(BaseImporter):
                     if canonical_block:
                         child_blocks.append(canonical_block)
             
+            # --- THE FIX ---
+            # Instead of creating a single "page" block that wraps the top-level blocks,
+            # we now treat each top-level block from the LogSeq page as a distinct
+            # CanonicalBlock. This preserves the desired separation for the AI agents.
             if child_blocks:
-                page_uuid_obj = self._get_logseq_value(page_info, 'block/uuid')
-                page_id = str(page_uuid_obj) if page_uuid_obj else f"page_{hash(page_title)}"
-                
-                # Instantiating the Pydantic model
-                all_pages.append(CanonicalBlock(
-                    block_id=page_id,
-                    source_ref=f"{source_filename}#page={page_title}",
-                    content=str(page_title),
-                    children=child_blocks
-                ))
+                all_pages.extend(child_blocks)
         
         return all_pages
 
