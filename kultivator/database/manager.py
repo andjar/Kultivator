@@ -102,10 +102,11 @@ class DatabaseManager:
             )
         """)
         
-        # AI Agent Call Logging table for EPOCH 6 (reproducibility)
+        # Create sequence for auto-incrementing call_id in ai_agent_calls
+        self.connection.execute("CREATE SEQUENCE IF NOT EXISTS call_id_seq;")
         self.connection.execute("""
             CREATE TABLE IF NOT EXISTS ai_agent_calls (
-                call_id INTEGER PRIMARY KEY,
+                call_id BIGINT PRIMARY KEY DEFAULT nextval('call_id_seq'),
                 agent_name VARCHAR NOT NULL,
                 input_data TEXT NOT NULL,
                 system_prompt TEXT,
@@ -324,27 +325,35 @@ class DatabaseManager:
     ) -> Optional[int]:
         """
         Log an AI agent call to the database for reproducibility.
-        
-        Args:
-            agent_name: Name of the agent that made the call
-            input_data: The input data passed to the agent
-            system_prompt: System prompt used
-            user_prompt: User prompt used
-            model_name: Name of the AI model used
-            raw_response: Raw response from the AI model
-            parsed_response: Parsed/processed response (optional)
-            success: Whether the call was successful
-            error_message: Error message if the call failed
-            execution_time_ms: Execution time in milliseconds
-            block_id: Related block ID (optional)
-            entity_name: Related entity name (optional)
-            
-        Returns:
-            The call_id of the logged call
+        (Defensive: Only log valid block_id/entity_name, else set to None and warn)
         """
         if not self.connection:
             raise RuntimeError("Database connection not established")
-            
+
+        # Defensive check for block_id
+        valid_block_id = None
+        if block_id is not None:
+            result = self.connection.execute(
+                "SELECT 1 FROM processed_blocks WHERE block_id = ? LIMIT 1",
+                [block_id]
+            ).fetchone()
+            if result:
+                valid_block_id = block_id
+            else:
+                logging.warning(f"log_ai_agent_call: block_id '{block_id}' does not exist in processed_blocks; setting to None.")
+
+        # Defensive check for entity_name
+        valid_entity_name = None
+        if entity_name is not None:
+            result = self.connection.execute(
+                "SELECT 1 FROM entities WHERE entity_name = ? LIMIT 1",
+                [entity_name]
+            ).fetchone()
+            if result:
+                valid_entity_name = entity_name
+            else:
+                logging.warning(f"log_ai_agent_call: entity_name '{entity_name}' does not exist in entities; setting to None.")
+
         result = self.connection.execute("""
             INSERT INTO ai_agent_calls (
                 agent_name, input_data, system_prompt, user_prompt, model_name,
@@ -355,9 +364,8 @@ class DatabaseManager:
         """, [
             agent_name, input_data, system_prompt, user_prompt, model_name,
             raw_response, parsed_response, success, error_message,
-            execution_time_ms, block_id, entity_name
+            execution_time_ms, valid_block_id, valid_entity_name
         ]).fetchone()
-        
         return result[0] if result else None
     
     def get_ai_agent_calls(
