@@ -354,7 +354,7 @@ def run_bootstrap_pipeline(importer_type: str, logseq_path: str | None = None):
         if not logseq_path:
             raise ValueError("Logseq path is required for logseq importer")
         try:
-            importer = LogseqEDNImporter(logseq_path)
+            importer = LogseqEDNImporter(logseq_path, output_file_path="logseq_blocks.json")
         except Exception as e:
             logging.error(f"Failed to initialize Logseq importer: {e}")
             logging.info("Falling back to mock importer with sample Logseq data")

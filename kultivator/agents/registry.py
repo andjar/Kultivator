@@ -50,7 +50,7 @@ Your task:
 Output format (JSON only, no explanations):
 {
   "entities": [
-    {"name": "Entity Name", "type": "person|project|place|company|book|other"}
+    {"name": "Entity Name", "type": "person|project|place|company|book|movie|music|etc|other"}
   ],
   "summary": "Brief summary of the core information"
 }""",
@@ -74,6 +74,8 @@ Write a complete, well-structured Markdown page that includes:
 
 Keep the content informative but concise. Use proper Markdown headers, lists, and formatting. 
 Write in a neutral, encyclopedic tone suitable for a personal knowledge base.
+Do not add information that is not supported by the context.
+Replace outdated information.
 Use the knowledge base context to identify potential relationships and cross-references.
 
 Do not include any metadata or front matter - just the Markdown content.""",
