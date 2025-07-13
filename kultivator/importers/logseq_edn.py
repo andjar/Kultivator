@@ -174,11 +174,16 @@ class LogseqEDNImporter(BaseImporter):
                     if child_block:
                         children.append(child_block)
 
+        created_at_ms = self._get_logseq_value(logseq_block, 'block/created-at')
+        updated_at_ms = self._get_logseq_value(logseq_block, 'block/updated-at')
+
         return CanonicalBlock(
             block_id=block_id,
             source_ref=f"{source_filename}#{page_title}#{block_id}",
             content=resolved_content,
-            children=children
+            children=children,
+            created_at=int(created_at_ms / 1000) if created_at_ms else None,
+            updated_at=int(updated_at_ms / 1000) if updated_at_ms else None,
         )
         
     def _save_output_to_json(self, blocks: List[CanonicalBlock]):

@@ -186,10 +186,18 @@ class AgentRunner:
         # Format the block content for processing
         content_text = self._format_block_for_prompt(block)
         
-        prompt = f"""Please analyze this content block and extract entities:
+        # Prepare timestamp information
+        current_timestamp = int(time.time())
+        created_at_str = str(block.created_at) if block.created_at else "N/A"
+        updated_at_str = str(block.updated_at) if block.updated_at else "N/A"
 
+        prompt = f"""Please analyze this content block and extract entities.
+
+Current Time: {current_timestamp}
 Source: {block.source_ref}
 Content: {content_text}
+Created At: {created_at_str}
+Updated At: {updated_at_str}
 
 Remember to output only valid JSON."""
 
@@ -198,7 +206,9 @@ Remember to output only valid JSON."""
             input_data = json.dumps({
                 "block_id": block.block_id,
                 "source_ref": block.source_ref,
-                "content": content_text
+                "content": content_text,
+                "created_at": block.created_at,
+                "updated_at": block.updated_at,
             })
             
             response = self._call_ollama_sync(
