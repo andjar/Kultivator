@@ -10,6 +10,7 @@ import json
 import time
 from typing import Dict, Any, Optional, List
 import logging
+from datetime import datetime, timezone
 
 from ..models import CanonicalBlock, TriageResult, Entity
 from ..database import DatabaseManager
@@ -188,12 +189,13 @@ class AgentRunner:
         
         # Prepare timestamp information
         current_timestamp = int(time.time())
-        created_at_str = str(block.created_at) if block.created_at else "N/A"
-        updated_at_str = str(block.updated_at) if block.updated_at else "N/A"
+        current_time_str = datetime.fromtimestamp(current_timestamp, tz=timezone.utc).isoformat()
+        created_at_str = datetime.fromtimestamp(block.created_at, tz=timezone.utc).isoformat() if block.created_at else "N/A"
+        updated_at_str = datetime.fromtimestamp(block.updated_at, tz=timezone.utc).isoformat() if block.updated_at else "N/A"
 
         prompt = f"""Please analyze this content block and extract entities.
 
-Current Time: {current_timestamp}
+Current Time: {current_time_str}
 Source: {block.source_ref}
 Content: {content_text}
 Created At: {created_at_str}
@@ -209,6 +211,7 @@ Remember to output only valid JSON."""
                 "content": content_text,
                 "created_at": block.created_at,
                 "updated_at": block.updated_at,
+                "current_time": current_timestamp,
             })
             
             response = self._call_ollama_sync(
@@ -279,7 +282,7 @@ Remember to output only valid JSON."""
             logging.error(f"Triage Agent failed: {e}")
             return TriageResult(entities=[], summary="Error processing content")
     
-    def run_synthesizer_agent(self, entity: Entity, summary: str, existing_content: Optional[str] = None) -> str:
+    def run_synthesizer_agent(self, entity: Entity, summary: str, block: CanonicalBlock, existing_content: Optional[str] = None) -> str:
         """
         Run the Synthesizer Agent to generate or update wiki content for an entity.
         
@@ -294,6 +297,14 @@ Remember to output only valid JSON."""
         # Gather additional context using database tools
         context_info = self._gather_entity_context(entity)
         
+        # Prepare timestamp information
+        current_timestamp = int(time.time())
+        
+        # Format timestamps into human-readable dates
+        created_at_str = datetime.fromtimestamp(block.created_at, tz=timezone.utc).isoformat() if block.created_at else "N/A"
+        updated_at_str = datetime.fromtimestamp(block.updated_at, tz=timezone.utc).isoformat() if block.updated_at else "N/A"
+        content_text = self._format_block_for_prompt(block)
+
         # Select appropriate agent based on mode
         if existing_content:
             # Merge mode: Update existing content with new information
@@ -306,6 +317,7 @@ Remember to output only valid JSON."""
 
 Entity Name: {entity.name}
 Entity Type: {entity.entity_type}
+Current Time: {current_timestamp}
 
 KNOWLEDGE BASE CONTEXT:
 {context_info}
@@ -315,6 +327,12 @@ EXISTING CONTENT:
 
 NEW INFORMATION:
 {summary}
+
+SOURCE BLOCK CONTEXT:
+Created At: {created_at_str}
+Updated At: {updated_at_str}
+Source: {block.source_ref}
+Raw Content: {content_text}
 
 Generate the complete updated Markdown page, preserving existing content while seamlessly integrating the new information. Use the knowledge base context to create relevant cross-references where appropriate."""
 
@@ -335,6 +353,13 @@ KNOWLEDGE BASE CONTEXT:
 
 NEW INFORMATION:
 {summary}
+
+SOURCE BLOCK CONTEXT:
+Source: {block.source_ref}
+Content: {content_text}
+Created At: {created_at_str}
+Updated At: {updated_at_str}
+Current Time: {current_timestamp}
 
 Generate a complete Markdown page with proper structure and formatting. Use the knowledge base context to create relevant cross-references where appropriate."""
 

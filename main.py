@@ -219,6 +219,10 @@ def run_epoch2_pipeline():
         db.initialize_database()
         logging.info("Database initialized")
         
+        # Initialize version manager
+        version_manager = VersionManager(config.wiki_directory)
+        logging.info("Version manager initialized")
+        
         # Get all blocks from mock importer
         blocks = importer.get_all_blocks()
         logging.info(f"Retrieved {len(blocks)} blocks from mock importer")
@@ -259,17 +263,14 @@ def run_epoch2_pipeline():
                             logging.info(f"Added entity {entity.name} to database")
                             entity_count += 1
                             
-                            # EPOCH 2: Generate content using Synthesizer Agent
-                            logging.info(f"Generating content for {entity.name}...")
-                            try:
-                                wiki_content = agent_runner.run_synthesizer_agent(entity, triage_result.summary)
-                                create_wiki_file_with_content(entity, wiki_path, wiki_content)
-                                logging.info(f"Generated content for {entity.name}")
-                            except Exception as e:
-                                logging.error(f"Failed to generate content for {entity.name}: {e}")
-                                # Fall back to placeholder
-                                create_placeholder_wiki_file(entity, wiki_path)
-                                
+                            # Synthesize new wiki content
+                            wiki_content = agent_runner.run_synthesizer_agent(entity, triage_result.summary, block=block)
+
+                            # Create wiki file with generated content
+                            create_wiki_file_with_content(entity, wiki_path, wiki_content)
+
+                            # Store the version of the wiki file
+                            version_manager.stage_and_commit([wiki_path], f"Initial synthesis for {entity.name}")
                         else:
                             logging.warning(f"Failed to add entity {entity.name} to database")
                             
@@ -429,7 +430,7 @@ def run_bootstrap_pipeline(importer_type: str, logseq_path: str | None = None):
                             # Generate content using Synthesizer Agent
                             logging.info(f"Generating content for {entity.name}...")
                             try:
-                                wiki_content = agent_runner.run_synthesizer_agent(entity, triage_result.summary)
+                                wiki_content = agent_runner.run_synthesizer_agent(entity, triage_result.summary, block=block)
                                 create_wiki_file_with_content(entity, wiki_path, wiki_content)
                                 logging.info(f"Generated content for {entity.name}")
                                 
@@ -482,25 +483,22 @@ def run_bootstrap_pipeline(importer_type: str, logseq_path: str | None = None):
 
 def run_incremental_pipeline(importer_type: str, logseq_path: str | None = None):
     """
-    Execute the EPOCH 4 incremental pipeline: detect changes and update wiki.
-    
-    Args:
-        importer_type: Type of importer to use ('mock' or 'logseq')
-        logseq_path: Path to Logseq database (if using logseq importer)
+    Execute the incremental update pipeline.
+
+    This pipeline imports new and updated blocks, processes them with AI agents,
+    and updates the wiki.
     """
-    logging.info("Starting Kultivator EPOCH 4 incremental pipeline...")
-    
-    # Initialize components
-    logging.info("Initializing components...")
-    
-    # Initialize importer
-    if importer_type == "mock":
-        importer = MockImporter()
-    elif importer_type == "logseq":
+    logging.info("Starting Kultivator incremental update pipeline...")
+
+    # Initialize importer based on type
+    importer = None
+    if importer_type == "logseq":
         if logseq_path is None:
             # Use default sample path for testing
             logseq_path = "./sample_logseq_data"
         importer = LogseqEDNImporter(logseq_path)
+    elif importer_type == "mock":
+        importer = MockImporter()
     else:
         raise ValueError(f"Unknown importer type: {importer_type}")
     
@@ -585,6 +583,7 @@ def run_incremental_pipeline(importer_type: str, logseq_path: str | None = None)
                                 merged_content = agent_runner.run_synthesizer_agent(
                                     entity, 
                                     triage_result.summary, 
+                                    block=block,
                                     existing_content=existing_content
                                 )
                                 
@@ -619,7 +618,7 @@ def run_incremental_pipeline(importer_type: str, logseq_path: str | None = None)
                                 # Generate content using Synthesizer Agent
                                 logging.info(f"Generating content for new entity {entity.name}...")
                                 try:
-                                    wiki_content = agent_runner.run_synthesizer_agent(entity, triage_result.summary)
+                                    wiki_content = agent_runner.run_synthesizer_agent(entity, triage_result.summary, block=block)
                                     create_wiki_file_with_content(entity, wiki_path, wiki_content)
                                     logging.info(f"Generated content for new entity {entity.name}")
                                     
