@@ -10,7 +10,7 @@
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/Codium-ai/kultivator
+   git clone https://github.com/andjar/kultivator
    cd kultivator
    ```
 
