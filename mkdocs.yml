@@ -1,0 +1,9 @@
+site_name: Kultivator
+theme:
+  name: material
+repo_url: https://github.com/Codium-ai/kultivator
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Configuration: configuration.md
+  - Architecture: architecture.md
