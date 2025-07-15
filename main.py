@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Dict
 
 from kultivator.models import Entity
-from kultivator.importers import MockImporter, LogseqEDNImporter
+from kultivator.importers import MockImporter, LogseqEDNImporter, LogseqClassicEDNImporter
 from kultivator.agents import AgentRunner
 from kultivator.database import DatabaseManager
 from kultivator.versioning import VersionManager
@@ -318,6 +318,22 @@ def confirm_bootstrap_wipe() -> bool:
             print("Please enter 'yes' or 'no'")
 
 
+def select_logseq_importer(logseq_path: str, output_file_path: str | None = None):
+    """
+    Selects the correct Logseq importer based on the presence of db.edn or logseq.edn in the directory.
+    Returns an instance of LogseqEDNImporter or LogseqClassicEDNImporter.
+    """
+    logseq_dir = Path(logseq_path)
+    db_edn = logseq_dir / "db.edn"
+    classic_edn = logseq_dir / "logseq.edn"
+    if db_edn.exists():
+        return LogseqEDNImporter(logseq_path, output_file_path=output_file_path)
+    elif classic_edn.exists():
+        return LogseqClassicEDNImporter(logseq_path, output_file_path=output_file_path)
+    else:
+        raise FileNotFoundError(f"Neither db.edn nor logseq.edn found in {logseq_path}")
+
+
 def run_bootstrap_pipeline(importer_type: str, logseq_path: str | None = None):
     """
     Execute the bootstrap pipeline: full processing with versioning.
@@ -355,7 +371,7 @@ def run_bootstrap_pipeline(importer_type: str, logseq_path: str | None = None):
         if not logseq_path:
             raise ValueError("Logseq path is required for logseq importer")
         try:
-            importer = LogseqEDNImporter(logseq_path, output_file_path="logseq_blocks.json")
+            importer = select_logseq_importer(logseq_path, output_file_path="logseq_blocks.json")
         except Exception as e:
             logging.error(f"Failed to initialize Logseq importer: {e}")
             logging.info("Falling back to mock importer with sample Logseq data")
@@ -460,7 +476,9 @@ def run_bootstrap_pipeline(importer_type: str, logseq_path: str | None = None):
                 logging.error("Failed to create bootstrap commit")
             
             # Save importer state to coordinate with future incremental runs
-            if isinstance(importer, LogseqEDNImporter):
+            if importer_type == "logseq" and (
+                isinstance(importer, LogseqEDNImporter) or isinstance(importer, LogseqClassicEDNImporter)
+            ):
                 logging.info("Saving importer state for future incremental runs...")
                 current_blocks = importer.get_all_blocks()
                 current_state = importer._calculate_block_state(current_blocks)
@@ -496,7 +514,12 @@ def run_incremental_pipeline(importer_type: str, logseq_path: str | None = None)
         if logseq_path is None:
             # Use default sample path for testing
             logseq_path = "./sample_logseq_data"
-        importer = LogseqEDNImporter(logseq_path)
+        try:
+            importer = select_logseq_importer(logseq_path)
+        except Exception as e:
+            logging.error(f"Failed to initialize Logseq importer: {e}")
+            logging.info("Falling back to mock importer with sample Logseq data")
+            importer = MockImporter()
     elif importer_type == "mock":
         importer = MockImporter()
     else:
