@@ -44,21 +44,23 @@ class AgentManager:
     Manages AI agents with configuration-based definitions and template support.
     """
     
-    def __init__(self, agent_registry: Optional[AgentRegistry] = None):
+    def __init__(self, agent_registry: Optional[AgentRegistry] = None, config_manager=None):
         """
         Initialize the agent manager.
         
         Args:
             agent_registry: Optional agent registry to use
+            config_manager: Optional config manager to use (defaults to global config)
         """
         self.agent_registry = agent_registry or AgentRegistry()
         self.agent_definitions: Dict[str, AgentDefinition] = {}
+        self.config_manager = config_manager or config
         self._load_agent_definitions()
         
     def _load_agent_definitions(self):
         """Load agent definitions from configuration."""
         try:
-            agent_defs = config.agent_definitions
+            agent_defs = self.config_manager.agent_definitions
             
             for agent_name, agent_config in agent_defs.items():
                 try:
@@ -254,7 +256,7 @@ class AgentManager:
     def reload_definitions(self):
         """Reload agent definitions from configuration."""
         self.agent_definitions.clear()
-        config.reload()
+        self.config_manager.reload()
         self._load_agent_definitions()
         logging.info("Agent definitions reloaded")
 
