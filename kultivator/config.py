@@ -91,7 +91,8 @@ class ConfigManager:
             "agents": {
                 "max_retries": 3,
                 "enable_tools": True,
-                "context_limit": 5
+                "context_limit": 5,
+                "definitions": {}
             },
             "performance": {
                 "batch_size": 100,
@@ -194,6 +195,23 @@ class ConfigManager:
     def context_limit(self) -> int:
         """Get agent context limit."""
         return self.get("agents.context_limit", 5)
+
+    @property
+    def agent_definitions(self) -> Dict[str, Any]:
+        """Get agent definitions from configuration."""
+        return self.get("agents.definitions", {})
+
+    def get_agent_definition(self, agent_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a specific agent definition by name.
+        
+        Args:
+            agent_name: Name of the agent
+            
+        Returns:
+            Agent definition dictionary or None if not found
+        """
+        return self.agent_definitions.get(agent_name)
 
 
 # Global configuration instance

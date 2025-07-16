@@ -36,6 +36,17 @@ class AgentRegistry:
     def _register_default_agents(self):
         """Register the default agents used by Kultivator."""
         
+        # NOTE: Default agents are now loaded from configuration by AgentManager
+        # This method is kept for backward compatibility but agents should be
+        # configured via config.yaml instead of code
+        
+        # Only register agents if they're not already loaded from config
+        if not hasattr(self, '_config_agents_loaded'):
+            self._register_legacy_agents()
+    
+    def _register_legacy_agents(self):
+        """Register legacy hard-coded agents as fallback."""
+        
         # Triage Agent - extracts entities and summarizes content
         self.register_agent(AgentConfig(
             name="triage",
