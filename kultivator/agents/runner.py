@@ -24,7 +24,8 @@ class AgentRunner:
     """
     
     def __init__(self, ollama_host: Optional[str] = None, model: Optional[str] = None, 
-                 database_manager: Optional[DatabaseManager] = None):
+                 database_manager: Optional[DatabaseManager] = None,
+                 agent_manager=None):
         """
         Initialize the agent runner.
         
@@ -32,11 +33,19 @@ class AgentRunner:
             ollama_host: The Ollama server URL (defaults to config value)
             model: The model name to use for inference (defaults to config value)
             database_manager: Optional database manager for agent tools
+            agent_manager: Optional agent manager for configuration-based agents
         """
         self.ollama_host = ollama_host or config.ollama_host
         self.model = model or config.model_name
         self.client = httpx.Client(timeout=config.ollama_timeout)
         self.db = database_manager
+        
+        # Import agent_manager here to avoid circular imports
+        if agent_manager is None:
+            from .manager import agent_manager as default_agent_manager
+            self.agent_manager = default_agent_manager
+        else:
+            self.agent_manager = agent_manager
         
     def __enter__(self):
         """Context manager entry."""
@@ -177,12 +186,15 @@ class AgentRunner:
         Returns:
             TriageResult containing discovered entities and summary
         """
-        # Get agent configuration from registry
-        agent_config = agent_registry.get_agent("triage")
-        if not agent_config:
-            raise ValueError("Triage agent not found in registry")
-            
-        system_prompt = agent_config.system_prompt
+        # Get system prompt from agent manager (fallback to registry)
+        try:
+            system_prompt = self.agent_manager.get_system_prompt("triage")
+        except ValueError:
+            # Fallback to registry if agent manager doesn't have the agent
+            agent_config = agent_registry.get_agent("triage")
+            if not agent_config:
+                raise ValueError("Triage agent not found")
+            system_prompt = agent_config.system_prompt
 
         # Format the block content for processing
         content_text = self._format_block_for_prompt(block)
@@ -193,7 +205,18 @@ class AgentRunner:
         created_at_str = datetime.fromtimestamp(block.created_at, tz=timezone.utc).isoformat() if block.created_at else "N/A"
         updated_at_str = datetime.fromtimestamp(block.updated_at, tz=timezone.utc).isoformat() if block.updated_at else "N/A"
 
-        prompt = f"""Please analyze this content block and extract entities.
+        # Try to use templated prompt from agent manager
+        try:
+            prompt = self.agent_manager.render_user_prompt("triage",
+                current_time=current_time_str,
+                source_ref=block.source_ref,
+                content=content_text,
+                created_at=created_at_str,
+                updated_at=updated_at_str
+            )
+        except ValueError:
+            # Fallback to hard-coded prompt
+            prompt = f"""Please analyze this content block and extract entities.
 
 Current Time: {current_time_str}
 Source: {block.source_ref}
@@ -289,6 +312,7 @@ Remember to output only valid JSON."""
         Args:
             entity: The entity to generate content for
             summary: Summary of new information about the entity
+            block: The source block containing the information
             existing_content: Optional existing content to merge with new information
             
         Returns:
@@ -306,14 +330,41 @@ Remember to output only valid JSON."""
         content_text = self._format_block_for_prompt(block)
 
         # Select appropriate agent based on mode
-        if existing_content:
-            # Merge mode: Update existing content with new information
-            agent_config = agent_registry.get_agent("synthesizer_merge")
+        agent_name = "synthesizer_merge" if existing_content else "synthesizer_create"
+        
+        # Try to use templated prompt from agent manager
+        try:
+            system_prompt = self.agent_manager.get_system_prompt(agent_name)
+            
+            # Prepare template variables
+            template_vars = {
+                'entity_name': entity.name,
+                'entity_type': entity.entity_type,
+                'context_info': context_info,
+                'summary': summary,
+                'content': content_text,
+                'source_ref': block.source_ref,
+                'created_at': created_at_str,
+                'updated_at': updated_at_str,
+                'current_time': str(current_timestamp)
+            }
+            
+            if existing_content:
+                template_vars['existing_content'] = existing_content
+                
+            prompt = self.agent_manager.render_user_prompt(agent_name, **template_vars)
+            
+        except ValueError:
+            # Fallback to registry-based approach
+            agent_config = agent_registry.get_agent(agent_name)
             if not agent_config:
-                raise ValueError("Synthesizer merge agent not found in registry")
+                raise ValueError(f"Synthesizer agent '{agent_name}' not found")
                 
             system_prompt = agent_config.system_prompt
-            prompt = f"""Update this existing wiki page with new information:
+            
+            # Generate fallback prompt
+            if existing_content:
+                prompt = f"""Update this existing wiki page with new information:
 
 Entity Name: {entity.name}
 Entity Type: {entity.entity_type}
@@ -335,15 +386,8 @@ Source: {block.source_ref}
 Raw Content: {content_text}
 
 Generate the complete updated Markdown page, preserving existing content while seamlessly integrating the new information. Use the knowledge base context to create relevant cross-references where appropriate."""
-
-        else:
-            # Creation mode: Generate new content from scratch
-            agent_config = agent_registry.get_agent("synthesizer_create")
-            if not agent_config:
-                raise ValueError("Synthesizer create agent not found in registry")
-                
-            system_prompt = agent_config.system_prompt
-            prompt = f"""Create a wiki page for this entity:
+            else:
+                prompt = f"""Create a wiki page for this entity:
 
 Entity Name: {entity.name}
 Entity Type: {entity.entity_type}
@@ -375,7 +419,7 @@ Generate a complete Markdown page with proper structure and formatting. Use the 
             response = self._call_ollama_sync(
                 prompt=prompt,
                 system_prompt=system_prompt,
-                agent_name="synthesizer_merge" if existing_content else "synthesizer_create",
+                agent_name=agent_name,
                 input_data=input_data,
                 entity_name=entity.name
             )
@@ -561,6 +605,112 @@ Generate a complete Markdown page with proper structure and formatting. Use the 
             context_parts.append(f"Total entities in knowledge base: {len(all_entities)}")
             
         return "\n".join(context_parts) if context_parts else "No additional context available."
+
+    def run_specialized_agent(self, agent_name: str, entity: Entity, summary: str, block: CanonicalBlock, existing_content: Optional[str] = None) -> str:
+        """
+        Run a specialized agent (task_manager, travel_planner, etc.) to generate content.
+        
+        Args:
+            agent_name: Name of the specialized agent to run
+            entity: The entity to generate content for
+            summary: Summary of new information about the entity
+            block: The source block containing the information
+            existing_content: Optional existing content to merge with new information
+            
+        Returns:
+            Generated or updated Markdown content for the entity's wiki page
+        """
+        # Gather additional context using database tools
+        context_info = self._gather_entity_context(entity)
+        
+        # Prepare timestamp information
+        current_timestamp = int(time.time())
+        
+        # Format timestamps into human-readable dates
+        created_at_str = datetime.fromtimestamp(block.created_at, tz=timezone.utc).isoformat() if block.created_at else "N/A"
+        updated_at_str = datetime.fromtimestamp(block.updated_at, tz=timezone.utc).isoformat() if block.updated_at else "N/A"
+        content_text = self._format_block_for_prompt(block)
+
+        # Try to use templated prompt from agent manager
+        try:
+            system_prompt = self.agent_manager.get_system_prompt(agent_name)
+            
+            # Prepare template variables
+            template_vars = {
+                'entity_name': entity.name,
+                'entity_type': entity.entity_type,
+                'context_info': context_info,
+                'summary': summary,
+                'content': content_text,
+                'source_ref': block.source_ref,
+                'created_at': created_at_str,
+                'updated_at': updated_at_str,
+                'current_time': str(current_timestamp)
+            }
+            
+            if existing_content:
+                template_vars['existing_content'] = existing_content
+                
+            prompt = self.agent_manager.render_user_prompt(agent_name, **template_vars)
+            
+        except ValueError as e:
+            raise ValueError(f"Specialized agent '{agent_name}' not found or invalid: {e}")
+
+        try:
+            # Format input data for logging
+            input_data = json.dumps({
+                "entity_name": entity.name,
+                "entity_type": entity.entity_type,
+                "summary": summary,
+                "has_existing_content": existing_content is not None,
+                "agent_name": agent_name
+            })
+            
+            response = self._call_ollama_sync(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                agent_name=agent_name,
+                input_data=input_data,
+                entity_name=entity.name
+            )
+            
+            # Clean up the response
+            response = response.strip()
+            
+            # Remove any markdown code block formatting if present
+            if response.startswith("```markdown"):
+                response = response[11:]
+            if response.startswith("```"):
+                response = response[3:]
+            if response.endswith("```"):
+                response = response[:-3]
+                
+            return response.strip()
+            
+        except Exception as e:
+            logging.error(f"Specialized Agent '{agent_name}' failed for {entity.name}: {e}")
+            # Return a basic fallback content
+            return f"""# {entity.name}
+
+*Type: {entity.entity_type.title()}*  
+*Processed by: {agent_name}*
+
+## Summary
+
+{summary}
+
+## Details
+
+*Additional information about {entity.name} will be added as it becomes available.*
+
+## Related Notes
+
+*This page was generated automatically by Kultivator using the {agent_name} agent.*
+
+## Error Note
+
+*The specialized agent encountered an error: {str(e)}*
+"""
 
     def _get_available_tools_description(self) -> str:
         """

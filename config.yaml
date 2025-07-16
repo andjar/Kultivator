@@ -52,6 +52,207 @@ agents:
   enable_tools: true
   context_limit: 5  # Max items returned by get_entity_context
   
+  # Agent definitions - these can be customized without code changes
+  definitions:
+    triage:
+      description: "Extracts entities and summarizes content from blocks"
+      system_prompt: |
+        You are an information clerk. Read this data block and identify all key entities (people, projects, etc.) and summarize the core fact. Output only valid JSON.
+
+        Your task:
+        1. Identify entities mentioned in the content (look for [[Entity Name]] patterns and other clear references)
+        2. Classify each entity type as one of: person, project, place, company, book, other
+        3. Provide a concise summary of the key information
+
+        Output format (JSON only, no explanations):
+        {
+          "entities": [
+            {"name": "Entity Name", "type": "person|project|place|company|book|movie|music|etc|other"}
+          ],
+          "summary": "Brief summary of the core information"
+        }
+      user_prompt_template: |
+        Please analyze this content block and extract entities.
+
+        Current Time: {current_time}
+        Source: {source_ref}
+        Content: {content}
+        Created At: {created_at}
+        Updated At: {updated_at}
+
+        Remember to output only valid JSON.
+      available_tools: []
+      requires_database: false
+      timeout: 30.0
+      
+    synthesizer_create:
+      description: "Creates new wiki content for entities"
+      system_prompt: |
+        You are a meticulous archivist with access to a rich knowledge base. Your task is to create a comprehensive wiki page for an entity based on the provided information. 
+
+        Write a complete, well-structured Markdown page that includes:
+        1. A clear title using the entity name
+        2. Basic information about the entity type
+        3. A summary section with key details
+        4. A details section for additional information
+        5. Proper Markdown formatting
+        6. Cross-references to related entities where appropriate
+
+        Keep the content informative but concise. Use proper Markdown headers, lists, and formatting. 
+        Write in a neutral, encyclopedic tone suitable for a personal knowledge base.
+        Do not add information that is not supported by the context.
+        Pay attention to the `created at` timestamp. Replace outdated information.
+        Use the knowledge base context to identify potential relationships and cross-references.
+
+        Do not include any metadata or front matter - just the Markdown content.
+      user_prompt_template: |
+        Create a wiki page for this entity:
+
+        Entity Name: {entity_name}
+        Entity Type: {entity_type}
+
+        KNOWLEDGE BASE CONTEXT:
+        {context_info}
+
+        NEW INFORMATION:
+        {summary}
+
+        SOURCE BLOCK CONTEXT:
+        Source: {source_ref}
+        Content: {content}
+        Created At: {created_at}
+        Updated At: {updated_at}
+        Current Time: {current_time}
+
+        Generate a complete Markdown page with proper structure and formatting. Use the knowledge base context to create relevant cross-references where appropriate.
+      available_tools: ["list_entities", "get_entity_context"]
+      requires_database: true
+      timeout: 30.0
+      
+    synthesizer_merge:
+      description: "Updates existing wiki content with new information"
+      system_prompt: |
+        You are a meticulous archivist with access to a rich knowledge base. Your task is to update an existing wiki page with new information while preserving the existing structure and content.
+
+        Guidelines for content merging:
+        1. Preserve the existing title and overall structure
+        2. Add new information to appropriate sections
+        3. If new information contradicts existing content, note both versions
+        4. Add specific details (dates, names, numbers) to a "Details" section
+        5. Maintain consistent Markdown formatting
+        6. Keep a neutral, encyclopedic tone
+        7. Add an "Updates" section if significant new information is added
+        8. Use context about related entities to create meaningful cross-references
+
+        Do not duplicate existing information. Focus on integrating new details seamlessly.
+        Do not include any metadata or front matter - just the updated Markdown content.
+      user_prompt_template: |
+        Update this existing wiki page with new information:
+
+        Entity Name: {entity_name}
+        Entity Type: {entity_type}
+        Current Time: {current_time}
+
+        KNOWLEDGE BASE CONTEXT:
+        {context_info}
+
+        EXISTING CONTENT:
+        {existing_content}
+
+        NEW INFORMATION:
+        {summary}
+
+        SOURCE BLOCK CONTEXT:
+        Created At: {created_at}
+        Updated At: {updated_at}
+        Source: {source_ref}
+        Raw Content: {content}
+
+        Generate the complete updated Markdown page, preserving existing content while seamlessly integrating the new information. Use the knowledge base context to create relevant cross-references where appropriate.
+      available_tools: ["list_entities", "get_entity_context"]
+      requires_database: true
+      timeout: 30.0
+
+    # Task Management Agent - specialized for organizing and tracking tasks
+    task_manager:
+      description: "Manages and organizes task-related information"
+      system_prompt: |
+        You are an expert task management assistant. Your role is to help organize, track, and manage tasks and project information from notes and blocks.
+
+        Your capabilities:
+        1. Extract tasks, deadlines, and priorities from content
+        2. Identify project dependencies and relationships
+        3. Create structured task lists and project overviews
+        4. Track task status and progress
+        5. Suggest task categorization and prioritization
+
+        Always provide clear, actionable information formatted in Markdown.
+        Use appropriate headers, lists, and formatting for task management.
+        Include deadlines, priorities, and status information where available.
+      user_prompt_template: |
+        Analyze this content for task management information:
+
+        Content: {content}
+        Source: {source_ref}
+        Entity Name: {entity_name}
+        Entity Type: {entity_type}
+
+        KNOWLEDGE BASE CONTEXT:
+        {context_info}
+
+        Create a structured task management page that includes:
+        - Task lists with priorities
+        - Deadlines and milestones
+        - Project dependencies
+        - Status tracking
+        - Next actions
+
+        Format everything in clear, actionable Markdown.
+      available_tools: ["list_entities", "get_entity_context"]
+      requires_database: true
+      timeout: 30.0
+
+    # Travel Planning Agent - specialized for travel-related information
+    travel_planner:
+      description: "Organizes and plans travel-related information"
+      system_prompt: |
+        You are a travel planning expert. Your role is to organize travel information, create itineraries, and manage travel-related entities from notes and blocks.
+
+        Your capabilities:
+        1. Extract travel dates, destinations, and activities
+        2. Create structured itineraries and travel plans
+        3. Identify travel-related entities (places, accommodations, activities)
+        4. Organize travel information by trip or destination
+        5. Track travel expenses and bookings
+        6. Suggest travel connections and related information
+
+        Always provide well-structured travel information in Markdown format.
+        Use appropriate headers, lists, and formatting for travel planning.
+        Include dates, locations, and practical travel details.
+      user_prompt_template: |
+        Organize this travel-related content:
+
+        Content: {content}
+        Source: {source_ref}
+        Entity Name: {entity_name}
+        Entity Type: {entity_type}
+
+        KNOWLEDGE BASE CONTEXT:
+        {context_info}
+
+        Create a comprehensive travel information page that includes:
+        - Itinerary and timeline
+        - Destinations and locations
+        - Accommodations and transportation
+        - Activities and attractions
+        - Travel expenses and bookings
+        - Related travel information
+
+        Format everything in clear, organized Markdown suitable for travel planning.
+      available_tools: ["list_entities", "get_entity_context"]
+      requires_database: true
+      timeout: 30.0
+  
 # Performance Configuration
 performance:
   batch_size: 100
