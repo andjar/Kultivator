@@ -8,9 +8,10 @@
 - *Extensible*: Add new importers for other note-taking apps
 
 #### **AI Agents** (`kultivator/agents/`)
-- **Triage Agent**: Extracts entities and creates summaries
-- **Synthesizer Agent**: Generates and updates wiki content
-- **Agent Registry**: Centralized configuration system
+- **AgentManager**: Manages agents defined in `config.yaml`.
+- **Configuration-based Agents**: Agents are defined in `config.yaml`, allowing for easy customization.
+- **Template System**: User prompts are generated from templates with dynamic variables.
+- **Specialized Agents**: Pre-configured agents for tasks, travel, and more.
 
 #### **Database** (`kultivator/database/`)
 - **DuckDB-based**: Fast, serverless SQL database
@@ -31,18 +32,11 @@ Wiki ← Synthesizer Agent ← Database ← Entity Processing
 
 ## Agent Architecture
 
-Kultivator uses a sophisticated AI agent system:
+Kultivator's agent architecture is designed for flexibility and ease of customization. All agents are defined in `config.yaml` and managed by the `AgentManager`.
 
-1. **Triage Agent**:
-   - Reads note blocks
-   - Identifies entities (people, projects, etc.)
-   - Creates summaries
+- **Agent Definitions**: Each agent is defined with a system prompt, a user prompt template, available tools, and other settings.
+- **Template System**: User prompts are dynamically rendered using a template system that injects context-specific variables.
+- **Specialized Agents**: The system comes with pre-configured agents for common tasks like `task_manager` and `travel_planner`.
+- **Custom Agents**: New agents can be added by simply defining them in the `config.yaml` file.
 
-2. **Synthesizer Agent**:
-   - Has access to database tools
-   - Can query related entities for context
-   - Generates rich, cross-referenced content
-
-3. **Database Tools**:
-   - `list_entities(type)`: Get entities by type
-   - `get_entity_context(name)`: Get mention history
+For a detailed explanation of the agent system, see the [Agent System Documentation](agent_system.md).

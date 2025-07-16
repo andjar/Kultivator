@@ -190,21 +190,14 @@ Wiki ← Synthesizer Agent ← Database ← Entity Processing
 
 ### Agent Architecture
 
-Kultivator uses a sophisticated AI agent system:
+Kultivator uses a sophisticated, configuration-driven AI agent system. Agents are defined in `config.yaml` and managed by the `AgentManager`.
 
-1. **Triage Agent**: 
-   - Reads note blocks
-   - Identifies entities (people, projects, etc.)
-   - Creates summaries
+- **Configuration-based agents**: Define agents in `config.yaml` instead of code
+- **Template system**: Dynamic user prompt generation with variables
+- **Specialized agents**: Pre-configured agents for specific domains (tasks, travel, etc.)
+- **Agent validation**: Validate agent definitions for correctness
 
-2. **Synthesizer Agent**:
-   - Has access to database tools
-   - Can query related entities for context
-   - Generates rich, cross-referenced content
-
-3. **Database Tools**:
-   - `list_entities(type)`: Get entities by type
-   - `get_entity_context(name)`: Get mention history
+For more details, see the [Agent System Documentation](docs/agent_system.md).
 
 ## ⚙️ Configuration Reference
 
@@ -212,6 +205,15 @@ Kultivator uses a sophisticated AI agent system:
 - `ai.ollama_host`: Ollama server URL
 - `ai.model`: Model name (gemma3, llama3.2, etc.)
 - `ai.timeout`: Request timeout in seconds
+
+### Agent Settings (`agents`)
+- `agents.definitions`: Contains all agent configurations.
+  - `description`: Brief description of the agent
+  - `system_prompt`: The system prompt for the agent
+  - `user_prompt_template`: Template for user prompts with `{variables}`
+  - `available_tools`: List of tools the agent can use
+  - `requires_database`: Whether the agent needs database access
+  - `timeout`: Agent-specific timeout
 
 ### Database Settings
 - `database.filename`: DuckDB database file
@@ -228,12 +230,7 @@ Kultivator uses a sophisticated AI agent system:
 ## 🧪 Testing
 
 Run the comprehensive test suite:
-
 ```bash
-# Test EPOCH 4 functionality (change detection, incremental updates)
-python test_epoch4.py
-
-# Test individual components
 python -m pytest tests/ -v
 ```
 
@@ -243,10 +240,10 @@ Test the system step by step:
 
 ```bash
 # 1. Test configuration
-python -c "from kultivator.config import config; print(f'Config loaded: {config.model_name}')"
+python -c "from kultivator.config import config; print(f'Config loaded: {config.ai.model}')"
 
-# 2. Test agent registry
-python -c "from kultivator.agents import agent_registry; print('Agents:', agent_registry.list_agents())"
+# 2. Test agent manager
+python -c "from kultivator.agents import agent_manager; print('Agents:', agent_manager.list_agents())"
 
 # 3. Test database
 python -c "from kultivator.database import DatabaseManager; db = DatabaseManager(); db.initialize_database(); print('Database OK')"
@@ -314,24 +311,28 @@ tail -f kultivator.log
 
 ### Adding New Agents
 
-1. **Define agent configuration**:
-   ```python
-   from kultivator.agents.registry import agent_registry, AgentConfig
-   
-   agent_registry.register_agent(AgentConfig(
-       name="my_agent",
-       description="Custom agent for special processing",
-       system_prompt="You are a specialist in...",
-       available_tools=["list_entities"],
-       requires_database=True
-   ))
+1. **Define agent in `config.yaml`**:
+   ```yaml
+   agents:
+     definitions:
+       my_custom_agent:
+         description: "Custom agent for special processing"
+         system_prompt: "You are a specialist in..."
+         user_prompt_template: "Process this: {content}"
+         available_tools: ["list_entities"]
+         requires_database: true
+         timeout: 30.0
    ```
 
-2. **Implement agent logic** in `AgentRunner`:
+2. **Use the new agent**:
    ```python
-   def run_my_agent(self, input_data):
-       config = agent_registry.get_agent("my_agent")
-       # Implementation here
+   from kultivator.agents import agent_manager
+
+   # The agent is automatically available
+   agent_def = agent_manager.get_agent_definition("my_custom_agent")
+
+   # Use it in the runner
+   runner.run_specialized_agent("my_custom_agent", ...)
    ```
 
 ### Database Schema
