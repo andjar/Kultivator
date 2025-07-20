@@ -1,7 +1,7 @@
 site_name: Kultivator
 theme:
   name: material
-repo_url: https://github.com/Codium-ai/kultivator
+repo_url: https://github.com/andjar/Kultivator
 nav:
   - Home: index.md
   - Installation: installation.md
